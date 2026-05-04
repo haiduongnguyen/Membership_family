@@ -1,0 +1,3 @@
+﻿-- optional seed (run manually in dev)
+-- insert into relationship_groups (id, user_id, name, group_type)
+-- values (gen_random_uuid(), '<AUTH_USER_ID>', 'Gia dinh', 'family');

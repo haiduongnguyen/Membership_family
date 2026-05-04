@@ -1,0 +1,3 @@
+﻿-- constraints.relationships.sql
+-- Expectation: source_person_id <> target_person_id enforced by no_self_relation constraint.
+-- insert relationship with same source and target should fail.

@@ -1,0 +1,6 @@
+﻿-- rls.users.sql
+-- Expectation: user can only read/update own row in public.users
+-- Steps:
+-- 1) set role authenticated; set request.jwt.claim.sub = '<user_a>';
+-- 2) select * from public.users where id = '<user_a>' -> allowed
+-- 3) select * from public.users where id = '<user_b>' -> denied/no rows

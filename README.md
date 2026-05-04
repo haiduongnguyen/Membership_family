@@ -1,36 +1,51 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+﻿# Relationship Memory MVP
 
-## Getting Started
+MVP web-app de quan ly va ghi nho moi quan he ca nhan theo graph/tree.
 
-First, run the development server:
+## Stack
+- Next.js 15 + React 18 + TypeScript
+- TailwindCSS
+- Supabase (Auth + Postgres + Storage)
+- React Flow (graph)
+- FullCalendar (calendar)
 
+## Chuc nang MVP da co
+- Dang nhap/Dang ky bang email + password
+- Tao nhom `Gia dinh`
+- Them thanh vien
+- Them moi quan he giua cac thanh vien
+- Hien thi graph theo tang the he (tu node goc)
+- Click node de xem/sua thong tin ca nhan
+- Them su kien sinh nhat/ky niem
+- Xem su kien tren lich thang
+- Upload anh dai dien va anh su kien
+
+## Cai dat
+1. Cai dependency:
+```bash
+npm install
+```
+2. Tao file `.env.local`:
+```bash
+cp .env.example .env.local
+```
+3. Dien thong tin Supabase trong `.env.local`.
+4. Chay SQL trong `supabase/schema.sql` tren SQL editor cua Supabase.
+5. Tao storage bucket `relationship-media` va bat Public.
+6. Chay app:
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Cau truc
+- `src/components/app-shell.tsx`: giao dien va luong chinh MVP
+- `src/lib/models.ts`: kieu du lieu core
+- `src/lib/supabase.ts`: Supabase client
+- `supabase/schema.sql`: schema + RLS policies
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Huong mo rong tiep theo
+- Replace prompt bang modal form (shadcn/ui)
+- Relation path finder: "Toi -> Bo -> ..."
+- Auto layout rieng cho family/company
+- Event participants + bo loc nang cao
+- Gallery theo group/person/event

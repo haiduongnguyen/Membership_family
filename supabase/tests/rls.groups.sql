@@ -1,0 +1,3 @@
+﻿-- rls.groups.sql
+-- Expectation: authenticated user accesses only own relationship_groups
+-- Steps mirror users test with user_id ownership checks.
