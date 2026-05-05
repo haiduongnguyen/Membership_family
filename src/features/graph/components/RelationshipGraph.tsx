@@ -1,4 +1,4 @@
-﻿import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from "@xyflow/react";
+﻿import { Background, Controls, MiniMap, ReactFlow, type Connection, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 type Props = {
@@ -6,6 +6,8 @@ type Props = {
   edges: Edge[];
   highlightedEdgeIds?: Set<string>;
   compactMode?: boolean;
+  onConnectNodes?: (connection: Connection) => void;
+  onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
 };
 
 function edgeColorByType(relationType: string | undefined) {
@@ -17,7 +19,14 @@ function edgeColorByType(relationType: string | undefined) {
   return "#94a3b8";
 }
 
-export default function RelationshipGraph({ nodes, edges, highlightedEdgeIds, compactMode }: Props) {
+export default function RelationshipGraph({
+  nodes,
+  edges,
+  highlightedEdgeIds,
+  compactMode,
+  onConnectNodes,
+  onNodePositionChange,
+}: Props) {
   const styledEdges = edges.map((edge) => {
     const relationType = (edge.data as { relationType?: string } | undefined)?.relationType;
     const baseColor = edgeColorByType(relationType);
@@ -34,7 +43,13 @@ export default function RelationshipGraph({ nodes, edges, highlightedEdgeIds, co
 
   return (
     <div className={compactMode ? "h-[62vh]" : "h-[70vh]"}>
-      <ReactFlow fitView nodes={nodes} edges={styledEdges}>
+      <ReactFlow
+        fitView
+        nodes={nodes}
+        edges={styledEdges}
+        onConnect={onConnectNodes}
+        onNodeDragStop={(_, node) => onNodePositionChange?.(node.id, node.position)}
+      >
         {!compactMode && <MiniMap />}
         <Controls />
         <Background />

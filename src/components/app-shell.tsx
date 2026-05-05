@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { type Edge, type Node } from "@xyflow/react";
+import { Handle, Position, type Connection, type Edge, type Node } from "@xyflow/react";
 import { CalendarDays, GalleryHorizontal, GitBranch, List, LogOut, MoreHorizontal, Plus, Search, Users, X } from "lucide-react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase";
 import type { EventItem, Person, Relationship, RelationshipGroup, RelationType } from "@/lib/models";
@@ -106,6 +106,8 @@ export default function AppShell() {
   const [openGroupMenuId, setOpenGroupMenuId] = useState<string | null>(null);
   const [isHiddenGroupsOpen, setIsHiddenGroupsOpen] = useState(false);
   const [groupPersonCount, setGroupPersonCount] = useState<Record<string, number>>({});
+  const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [pendingRelation, setPendingRelation] = useState<{ sourceId: string; targetId: string } | null>(null);
   const [undoStack, setUndoStack] = useState<GraphAction[]>([]);
   const [redoStack, setRedoStack] = useState<GraphAction[]>([]);
   const [isReplayingAction, setIsReplayingAction] = useState(false);
@@ -158,6 +160,7 @@ export default function AppShell() {
       setPeople(p.data ?? []);
       setRelationships(r.data ?? []);
       setEvents(e.data ?? []);
+      setNodePositions({});
       setUndoStack([]);
       setRedoStack([]);
     });
@@ -221,75 +224,54 @@ export default function AppShell() {
     [relationships, rootPersonId, selectedPerson?.id],
   );
 
+  function getAgeLabel(birthDate: string | null) {
+    if (!birthDate) return "Chưa rõ tuổi";
+    const d = new Date(birthDate);
+    if (Number.isNaN(d.getTime())) return "Chưa rõ tuổi";
+    const today = new Date();
+    let age = today.getFullYear() - d.getFullYear();
+    const m = today.getMonth() - d.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age -= 1;
+    return `${Math.max(age, 0)} tuổi`;
+  }
+
+  function getInitials(name: string) {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
+  }
+
   const nodes: Node[] = graphPeople.map((p) => {
     const point = layoutPoints.find((x) => x.id === p.id) ?? { x: 0, y: 0 };
+    const manualPosition = nodePositions[p.id];
     const isSelected = selectedPerson?.id === p.id;
     return {
       id: p.id,
-      position: { x: point.x, y: point.y },
+      position: manualPosition ?? { x: point.x, y: point.y },
       data: {
         label: (
-          <button
-            className={`w-56 rounded-2xl border bg-white px-3 py-2 text-left shadow-sm transition hover:shadow-md ${
+          <div
+            className={`relative w-56 rounded-2xl border bg-white px-3 py-2 text-left shadow-sm transition hover:shadow-md ${
               isSelected ? "border-cyan-500 ring-2 ring-cyan-100" : "border-slate-200"
             }`}
             onClick={() => setSelectedPerson(p)}
           >
-            <p className="truncate text-sm font-semibold text-slate-900">{p.full_name}</p>
-            <p className="truncate text-xs text-slate-500">{p.relationship_to_user || "Chưa rõ quan hệ"}</p>
-            <div className="mt-2 flex flex-wrap gap-1">
-              <span
-                className="inline-flex rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openQuickAdd(p.id, "father");
-                }}
-              >
-                + Bố
-              </span>
-              <span
-                className="inline-flex rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openQuickAdd(p.id, "mother");
-                }}
-              >
-                + Mẹ
-              </span>
-              <span
-                className="inline-flex rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openQuickAdd(p.id, "child");
-                }}
-              >
-                + Con
-              </span>
-              <span
-                className="inline-flex rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openQuickAdd(p.id, "spouse");
-                }}
-              >
-                + Vợ/chồng
-              </span>
-              <span
-                className="inline-flex rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-700"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openQuickAdd(p.id);
-                }}
-              >
-                + Khác
-              </span>
+            <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !border !border-cyan-600 !bg-white" />
+            <Handle type="source" position={Position.Right} className="!h-2.5 !w-2.5 !border !border-cyan-600 !bg-cyan-500" />
+            <div className="flex items-center gap-2">
+              {p.avatar_url ? (
+                <img src={p.avatar_url} alt={p.full_name} className="h-9 w-9 rounded-full object-cover" />
+              ) : (
+                <div className="grid h-9 w-9 place-items-center rounded-full bg-cyan-100 text-xs font-bold text-cyan-700">
+                  {getInitials(p.full_name)}
+                </div>
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-slate-900">{p.full_name}</p>
+                <p className="truncate text-xs text-slate-500">{getAgeLabel(p.birth_date)}</p>
+              </div>
             </div>
-          </button>
+          </div>
         ),
       },
     };
@@ -501,6 +483,17 @@ export default function AppShell() {
     setQuickAddRelationType(relationType);
   }
 
+  function handleNodePositionChange(nodeId: string, position: { x: number; y: number }) {
+    setNodePositions((prev) => ({ ...prev, [nodeId]: position }));
+  }
+
+  function handleConnectNodes(connection: Connection) {
+    if (!connection.source || !connection.target) return;
+    if (connection.source === connection.target) return;
+    setPendingRelation({ sourceId: connection.source, targetId: connection.target });
+    setIsRelationshipDialogOpen(true);
+  }
+
   async function submitQuickAdd() {
     if (!activeGroupId || !quickAddAnchorId || !quickAddName.trim()) return;
     setQuickAddSubmitting(true);
@@ -541,6 +534,7 @@ export default function AppShell() {
 
   async function addRelationship() {
     if (!activeGroupId || people.length < 2) return;
+    setPendingRelation(null);
     setIsRelationshipDialogOpen(true);
   }
 
@@ -584,6 +578,7 @@ export default function AppShell() {
     }
 
     setIsRelationshipSubmitting(false);
+    setPendingRelation(null);
   }
 
   async function addEvent() {
@@ -674,7 +669,12 @@ export default function AppShell() {
         open={isRelationshipDialogOpen}
         people={people}
         loading={isRelationshipSubmitting}
-        onClose={() => setIsRelationshipDialogOpen(false)}
+        initialSourceId={pendingRelation?.sourceId ?? null}
+        initialTargetId={pendingRelation?.targetId ?? null}
+        onClose={() => {
+          setIsRelationshipDialogOpen(false);
+          setPendingRelation(null);
+        }}
         onSubmit={handleCreateRelationship}
       />
       {quickAddAnchorId && (
@@ -851,7 +851,7 @@ export default function AppShell() {
               </button>
             </div>
           </div>
-          <div className="text-sm text-slate-600">Chạm vào một box để mở nhóm tương ứng, sau đó thêm người trực tiếp từ node trên sơ đồ.</div>
+          <div className="text-sm text-slate-600">Kéo node để dàn bố cục theo ý bạn. Kéo từ chấm phải của node này sang chấm trái node khác để tạo quan hệ nhanh.</div>
           {viewMode === "graph" && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-slate-700">Độ sâu hiển thị:</span>
@@ -961,6 +961,8 @@ export default function AppShell() {
                 edges={edges}
                 highlightedEdgeIds={highlightedEdgeIds}
                 compactMode={isMobileGraph}
+                onConnectNodes={handleConnectNodes}
+                onNodePositionChange={handleNodePositionChange}
               />
             )}
 

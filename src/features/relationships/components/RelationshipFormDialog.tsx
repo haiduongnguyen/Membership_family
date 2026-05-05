@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import type { Person, RelationType } from "@/lib/models";
 
 const relationOptions: RelationType[] = [
@@ -36,15 +36,31 @@ type Props = {
   open: boolean;
   people: Person[];
   loading?: boolean;
+  initialSourceId?: string | null;
+  initialTargetId?: string | null;
   onClose: () => void;
   onSubmit: (input: { sourceId: string; targetId: string; relationType: RelationType }) => Promise<void>;
 };
 
-export default function RelationshipFormDialog({ open, people, loading = false, onClose, onSubmit }: Props) {
+export default function RelationshipFormDialog({
+  open,
+  people,
+  loading = false,
+  initialSourceId,
+  initialTargetId,
+  onClose,
+  onSubmit,
+}: Props) {
   const [sourceId, setSourceId] = useState("");
   const [targetId, setTargetId] = useState("");
   const [relationType, setRelationType] = useState<RelationType>("child");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setSourceId(initialSourceId ?? "");
+    setTargetId(initialTargetId ?? "");
+  }, [open, initialSourceId, initialTargetId]);
 
   const canSubmit = useMemo(() => sourceId && targetId && relationType, [sourceId, targetId, relationType]);
 
@@ -89,4 +105,3 @@ export default function RelationshipFormDialog({ open, people, loading = false, 
     </div>
   );
 }
-
