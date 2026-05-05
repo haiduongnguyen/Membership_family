@@ -2,14 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type Edge, type Node } from "@xyflow/react";
-import { CalendarDays, GalleryHorizontal, GitBranch, List, LogOut, MoreHorizontal, Plus, Search, Users } from "lucide-react";
+import { CalendarDays, GalleryHorizontal, GitBranch, List, LogOut, MoreHorizontal, Plus, Search, Users, X } from "lucide-react";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase";
 import type { EventItem, Person, Relationship, RelationshipGroup, RelationType } from "@/lib/models";
 import AuthForm from "@/features/auth/components/AuthForm";
 import { useAuth } from "@/features/auth/hooks/useAuth";
-import { createGroup, deleteGroup, fetchGroups, renameGroup } from "@/features/groups/api";
-import { createPerson, fetchPersons, updatePerson } from "@/features/persons/api";
-import PersonFormDialog from "@/features/persons/components/PersonFormDialog";
+import { createGroupWithRoot, createPersonFromAnchor, deleteGroup, fetchGroups, renameGroup } from "@/features/groups/api";
+import { fetchPersons, updatePerson } from "@/features/persons/api";
 import PersonDetailPanel from "@/features/persons/components/PersonDetailPanel";
 import {
   createRelationship,
@@ -19,6 +18,7 @@ import {
 } from "@/features/relationships/api";
 import { buildFamilyLayout } from "@/features/graph/layout/familyLayout";
 import RelationshipGraph from "@/features/graph/components/RelationshipGraph";
+import { findPathEdgeIds } from "@/features/graph/path";
 import {
   createEvent,
   fetchEvents,
@@ -71,8 +71,10 @@ export default function AppShell() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [selectedPerson, setSelectedPerson] = useState<Person | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [isPersonDialogOpen, setIsPersonDialogOpen] = useState(false);
-  const [isPersonSubmitting, setIsPersonSubmitting] = useState(false);
+  const [quickAddAnchorId, setQuickAddAnchorId] = useState<string | null>(null);
+  const [quickAddName, setQuickAddName] = useState("");
+  const [quickAddRelationType, setQuickAddRelationType] = useState<RelationType>("child");
+  const [quickAddSubmitting, setQuickAddSubmitting] = useState(false);
   const [isEventDialogOpen, setIsEventDialogOpen] = useState(false);
   const [isEventSubmitting, setIsEventSubmitting] = useState(false);
   const [isRelationshipDialogOpen, setIsRelationshipDialogOpen] = useState(false);
@@ -82,30 +84,37 @@ export default function AppShell() {
   const [query, setQuery] = useState("");
   const [isBootstrappingDb, setIsBootstrappingDb] = useState(false);
   const [openGroupMenuId, setOpenGroupMenuId] = useState<string | null>(null);
+  const [isHiddenGroupsOpen, setIsHiddenGroupsOpen] = useState(false);
+  const [groupPersonCount, setGroupPersonCount] = useState<Record<string, number>>({});
   const hasTriedBootstrapRef = useRef(false);
   const { pushToast } = useToast();
   const { userId, loading: isAuthLoading, message: authMessage, error: authError, login, register, logout } = useAuth(sb);
+  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? null;
+
+  async function ensureDbSchemaOnce() {
+    if (isBootstrappingDb || hasTriedBootstrapRef.current) return false;
+    hasTriedBootstrapRef.current = true;
+    setIsBootstrappingDb(true);
+    const bootstrapResult = await bootstrapDatabaseIfNeeded();
+    setIsBootstrappingDb(false);
+    if ("error" in bootstrapResult) {
+      pushToast(`Khởi tạo cơ sở dữ liệu thất bại: ${bootstrapResult.error}`, "error");
+      return false;
+    }
+    pushToast("Đã cập nhật cấu trúc dữ liệu. Đang thử lại...", "success");
+    return true;
+  }
 
   useEffect(() => {
     if (!userId) return;
-    fetchGroups(sb, userId).then((result) => {
-      if (result.error?.includes("relationship_groups") && !isBootstrappingDb && !hasTriedBootstrapRef.current) {
-        hasTriedBootstrapRef.current = true;
-        setIsBootstrappingDb(true);
-        void bootstrapDatabaseIfNeeded().then((bootstrapResult) => {
-          if ("error" in bootstrapResult) {
-            pushToast(`Khởi tạo cơ sở dữ liệu thất bại: ${bootstrapResult.error}`, "error");
-            setIsBootstrappingDb(false);
-            return;
-          }
-          pushToast("Đã khởi tạo bảng dữ liệu tự động. Đang tải lại...", "success");
-          setIsBootstrappingDb(false);
-          void fetchGroups(sb, userId).then((retry) => {
-            const retryList = retry.data ?? [];
-            setGroups(retryList);
-            if (retryList.length) setActiveGroupId((prev) => prev ?? retryList[0].id);
-          });
-        });
+    fetchGroups(sb, userId).then(async (result) => {
+      if (result.error?.includes("root_person_id") || result.error?.includes("relationship_groups")) {
+        const bootstrapped = await ensureDbSchemaOnce();
+        if (!bootstrapped) return;
+        const retry = await fetchGroups(sb, userId);
+        const retryList = retry.data ?? [];
+        setGroups(retryList);
+        if (retryList.length) setActiveGroupId((prev) => prev ?? retryList[0].id);
         return;
       }
 
@@ -113,7 +122,7 @@ export default function AppShell() {
       setGroups(list);
       if (list.length) setActiveGroupId((prev) => prev ?? list[0].id);
     });
-  }, [userId, sb, isBootstrappingDb, pushToast]);
+  }, [userId, sb, pushToast]);
 
   useEffect(() => {
     if (!activeGroupId) return;
@@ -128,6 +137,28 @@ export default function AppShell() {
     });
   }, [activeGroupId, sb]);
 
+  useEffect(() => {
+    if (!groups.length) {
+      setGroupPersonCount({});
+      return;
+    }
+    const groupIds = groups.map((group) => group.id);
+    sb.from("persons")
+      .select("group_id")
+      .in("group_id", groupIds)
+      .then(({ data, error }) => {
+        if (error || !data) return;
+        const nextCount = groupIds.reduce<Record<string, number>>((acc, id) => {
+          acc[id] = 0;
+          return acc;
+        }, {});
+        for (const item of data as { group_id: string }[]) {
+          nextCount[item.group_id] = (nextCount[item.group_id] ?? 0) + 1;
+        }
+        setGroupPersonCount(nextCount);
+      });
+  }, [groups, sb]);
+
   const filteredPeople = useMemo(
     () =>
       people.filter(
@@ -140,19 +171,80 @@ export default function AppShell() {
 
   const layoutPoints = useMemo(() => buildFamilyLayout(filteredPeople, relationships), [filteredPeople, relationships]);
 
+  const rootPersonId = activeGroup?.root_person_id ?? people[0]?.id ?? null;
+  const highlightedEdgeIds = useMemo(
+    () => findPathEdgeIds(relationships, rootPersonId, selectedPerson?.id ?? null),
+    [relationships, rootPersonId, selectedPerson?.id],
+  );
+
   const nodes: Node[] = filteredPeople.map((p) => {
     const point = layoutPoints.find((x) => x.id === p.id) ?? { x: 0, y: 0 };
+    const isSelected = selectedPerson?.id === p.id;
     return {
       id: p.id,
       position: { x: point.x, y: point.y },
       data: {
         label: (
           <button
-            className="w-48 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-left shadow-sm transition hover:shadow-md"
+            className={`w-56 rounded-2xl border bg-white px-3 py-2 text-left shadow-sm transition hover:shadow-md ${
+              isSelected ? "border-cyan-500 ring-2 ring-cyan-100" : "border-slate-200"
+            }`}
             onClick={() => setSelectedPerson(p)}
           >
             <p className="truncate text-sm font-semibold text-slate-900">{p.full_name}</p>
             <p className="truncate text-xs text-slate-500">{p.relationship_to_user || "Chưa rõ quan hệ"}</p>
+            <div className="mt-2 flex flex-wrap gap-1">
+              <span
+                className="inline-flex rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openQuickAdd(p.id, "father");
+                }}
+              >
+                + Bố
+              </span>
+              <span
+                className="inline-flex rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openQuickAdd(p.id, "mother");
+                }}
+              >
+                + Mẹ
+              </span>
+              <span
+                className="inline-flex rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openQuickAdd(p.id, "child");
+                }}
+              >
+                + Con
+              </span>
+              <span
+                className="inline-flex rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openQuickAdd(p.id, "spouse");
+                }}
+              >
+                + Vợ/chồng
+              </span>
+              <span
+                className="inline-flex rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openQuickAdd(p.id);
+                }}
+              >
+                + Khác
+              </span>
+            </div>
           </button>
         ),
       },
@@ -168,17 +260,36 @@ export default function AppShell() {
       label: RELATION_LABELS[r.relation_type] ?? r.relation_type,
     }));
 
+  const visibleGroups = groups.slice(0, 5);
+  const hiddenGroups = groups.slice(5);
+
   async function createNewGroup() {
     if (!userId) return;
     const inputName = window.prompt("Nhập tên nhóm mới:", "Nhóm mới");
     const groupName = inputName?.trim();
     if (!groupName) return;
-    const result = await createGroup(sb, userId, groupName, "other");
+    const result = await createGroupWithRoot(sb, userId, groupName, "other", "Tôi");
     if (result.data) {
       setGroups((prev) => [...prev, result.data as RelationshipGroup]);
+      setGroupPersonCount((prev) => ({ ...prev, [result.data.id]: 1 }));
       setActiveGroupId(result.data.id);
       pushToast(`Đã tạo nhóm "${groupName}"`, "success");
     } else if (result.error) {
+      if (result.error.includes("root_person_id")) {
+        const bootstrapped = await ensureDbSchemaOnce();
+        if (bootstrapped) {
+          const retry = await createGroupWithRoot(sb, userId, groupName, "other", "Tôi");
+          if (retry.data) {
+            setGroups((prev) => [...prev, retry.data as RelationshipGroup]);
+            setGroupPersonCount((prev) => ({ ...prev, [retry.data.id]: 1 }));
+            setActiveGroupId(retry.data.id);
+            pushToast(`Đã tạo nhóm "${groupName}"`, "success");
+            return;
+          }
+          pushToast(retry.error ?? "Tạo nhóm thất bại", "error");
+          return;
+        }
+      }
       pushToast(result.error ?? "Tạo nhóm thất bại", "error");
     }
   }
@@ -216,31 +327,54 @@ export default function AppShell() {
     }
     const nextGroups = groups.filter((group) => group.id !== groupId);
     setGroups(nextGroups);
+    setGroupPersonCount((prev) => {
+      const next = { ...prev };
+      delete next[groupId];
+      return next;
+    });
     if (activeGroupId === groupId) {
       setActiveGroupId(nextGroups[0]?.id ?? null);
     }
     pushToast("Đã xóa nhóm", "success");
   }
 
-  async function addPerson() {
-    if (!activeGroupId) return;
-    setIsPersonDialogOpen(true);
+  function openQuickAdd(anchorPersonId: string | null, relationType: RelationType = "child") {
+    if (!anchorPersonId) {
+      pushToast("Nhóm này chưa có node gốc", "error");
+      return;
+    }
+    setQuickAddAnchorId(anchorPersonId);
+    setQuickAddName("");
+    setQuickAddRelationType(relationType);
   }
 
-  async function handleCreatePerson(input: { full_name: string; relationship_to_user: string }) {
-    if (!activeGroupId) return;
-    setIsPersonSubmitting(true);
-    try {
-      const result = await createPerson(sb, activeGroupId, input);
-      if (result.data) {
-        setPeople((prev) => [...prev, result.data as Person]);
-        pushToast("Đã thêm thành viên", "success");
-      } else if (result.error) {
-        pushToast(result.error ?? "Thêm thành viên thất bại", "error");
-      }
-    } finally {
-      setIsPersonSubmitting(false);
+  async function submitQuickAdd() {
+    if (!activeGroupId || !quickAddAnchorId || !quickAddName.trim()) return;
+    setQuickAddSubmitting(true);
+    const result = await createPersonFromAnchor(
+      sb,
+      activeGroupId,
+      quickAddAnchorId,
+      quickAddName.trim(),
+      quickAddRelationType,
+    );
+    if ("error" in result) {
+      pushToast(result.error ?? "Thêm thành viên thất bại", "error");
+      setQuickAddSubmitting(false);
+      return;
     }
+    const person = result.data.person as Person;
+    const relationship = result.data.relationship as Relationship;
+    setPeople((prev) => [...prev, person]);
+    setRelationships((prev) => [...prev, relationship]);
+    setGroupPersonCount((prev) => ({
+      ...prev,
+      [activeGroupId]: (prev[activeGroupId] ?? 0) + 1,
+    }));
+    setSelectedPerson(person);
+    setQuickAddAnchorId(null);
+    setQuickAddSubmitting(false);
+    pushToast("Đã thêm thành viên từ sơ đồ", "success");
   }
 
   async function addRelationship() {
@@ -349,14 +483,16 @@ export default function AppShell() {
     return <AuthForm loading={isAuthLoading} error={authError} message={authMessage} onLogin={login} onRegister={register} />;
   }
 
+  function getGroupTypeLabel(groupType: RelationshipGroup["group_type"]) {
+    if (groupType === "family") return "Gia đình";
+    if (groupType === "company") return "Công ty";
+    if (groupType === "friends") return "Bạn bè";
+    if (groupType === "clan") return "Dòng họ";
+    return "Nhóm khác";
+  }
+
   return (
     <main className="min-h-screen text-slate-900">
-      <PersonFormDialog
-        open={isPersonDialogOpen}
-        loading={isPersonSubmitting}
-        onClose={() => setIsPersonDialogOpen(false)}
-        onSubmit={handleCreatePerson}
-      />
       <EventFormDialog
         open={isEventDialogOpen}
         people={people}
@@ -371,16 +507,57 @@ export default function AppShell() {
         onClose={() => setIsRelationshipDialogOpen(false)}
         onSubmit={handleCreateRelationship}
       />
+      {quickAddAnchorId && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+            <h3 className="font-semibold">Thêm người liên quan</h3>
+            <p className="text-sm text-slate-500">
+              Quan hệ với: {people.find((p) => p.id === quickAddAnchorId)?.full_name ?? "Nút neo"}
+            </p>
+            <input
+              className="w-full rounded-lg border p-2 text-sm"
+              placeholder="Họ tên"
+              value={quickAddName}
+              onChange={(e) => setQuickAddName(e.target.value)}
+            />
+            <select
+              className="w-full rounded-lg border p-2 text-sm"
+              value={quickAddRelationType}
+              onChange={(e) => setQuickAddRelationType(e.target.value as RelationType)}
+            >
+              {Object.entries(RELATION_LABELS)
+                .filter(([key]) => key !== "self")
+                .map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+            </select>
+            <div className="flex justify-end gap-2">
+              <button className="rounded-lg border px-3 py-2 text-sm" onClick={() => setQuickAddAnchorId(null)}>
+                Hủy
+              </button>
+              <button
+                disabled={quickAddSubmitting || !quickAddName.trim()}
+                className="rounded-lg bg-cyan-600 px-3 py-2 text-sm text-white disabled:opacity-60"
+                onClick={() => void submitQuickAdd()}
+              >
+                {quickAddSubmitting ? "Đang lưu..." : "Lưu"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="mx-auto max-w-[1450px] p-4 lg:p-6">
         <div className="mb-4 rounded-3xl border border-white/50 bg-white/70 p-4 shadow-lg backdrop-blur">
-          <div className="mb-3 flex items-start gap-3 overflow-x-auto pb-1">
-            {groups.map((group) => {
+          <div className="mb-3 flex items-start gap-3 pb-1">
+            {visibleGroups.map((group) => {
               const isActive = group.id === activeGroupId;
               return (
                 <div
                   key={group.id}
-                  className={`min-w-[160px] shrink-0 rounded-2xl border px-4 py-3 text-left transition md:w-[calc((100%-3rem)/5)] ${
+                  className={`min-w-[200px] shrink-0 rounded-2xl border px-4 py-3 text-left transition md:w-[calc((100%-4rem)/5)] ${
                     isActive
                       ? "border-cyan-500 bg-cyan-50 shadow-sm"
                       : "border-slate-200 bg-white hover:border-cyan-300"
@@ -392,9 +569,8 @@ export default function AppShell() {
                       className="flex-1 text-left"
                     >
                       <p className="truncate text-sm font-semibold text-slate-900">{group.name}</p>
-                      <p className="text-xs text-slate-500">
-                        {group.group_type === "family" ? "Gia đình" : "Nhóm quan hệ"}
-                      </p>
+                      <p className="text-xs text-slate-500">{getGroupTypeLabel(group.group_type)}</p>
+                      <p className="text-xs text-slate-400">{groupPersonCount[group.id] ?? 0} thành viên</p>
                     </button>
                     <div className="relative">
                       <button
@@ -432,9 +608,49 @@ export default function AppShell() {
                 </div>
               );
             })}
+            {hiddenGroups.length > 0 && (
+              <div className="relative min-w-[120px] shrink-0 md:w-[calc((100%-4rem)/5)]">
+                <button
+                  onClick={() => setIsHiddenGroupsOpen((prev) => !prev)}
+                  className="flex h-full w-full items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:border-cyan-400 hover:text-cyan-700"
+                >
+                  +{hiddenGroups.length}
+                </button>
+                {isHiddenGroupsOpen && (
+                  <div className="absolute left-0 top-14 z-30 w-72 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div className="mb-2 flex items-center justify-between px-2 pt-1">
+                      <p className="text-sm font-semibold text-slate-800">Nhóm khác</p>
+                      <button
+                        className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"
+                        onClick={() => setIsHiddenGroupsOpen(false)}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <div className="space-y-1">
+                      {hiddenGroups.map((group) => (
+                        <button
+                          key={group.id}
+                          className="w-full rounded-xl px-2 py-2 text-left hover:bg-slate-100"
+                          onClick={() => {
+                            setActiveGroupId(group.id);
+                            setIsHiddenGroupsOpen(false);
+                          }}
+                        >
+                          <p className="truncate text-sm font-semibold text-slate-900">{group.name}</p>
+                          <p className="text-xs text-slate-500">
+                            {getGroupTypeLabel(group.group_type)} • {groupPersonCount[group.id] ?? 0} thành viên
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <button
               onClick={() => void createNewGroup()}
-              className="flex min-w-[160px] shrink-0 items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:border-cyan-400 hover:text-cyan-700 md:w-[calc((100%-3rem)/5)]"
+              className="flex min-w-[200px] shrink-0 items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:border-cyan-400 hover:text-cyan-700 md:w-[calc((100%-4rem)/5)]"
             >
               <Plus size={16} /> + Nhóm
             </button>
@@ -465,7 +681,7 @@ export default function AppShell() {
               </button>
             </div>
           </div>
-          <div className="text-sm text-slate-600">Chạm vào một box để mở nhóm tương ứng.</div>
+          <div className="text-sm text-slate-600">Chạm vào một box để mở nhóm tương ứng, sau đó thêm người trực tiếp từ node trên sơ đồ.</div>
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[300px_1fr_340px]">
@@ -500,7 +716,7 @@ export default function AppShell() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 aria-label="Thêm thành viên"
-                onClick={() => void addPerson()}
+                onClick={() => openQuickAdd(selectedPerson?.id ?? activeGroup?.root_person_id ?? people[0]?.id ?? null)}
                 className="flex items-center justify-center gap-1 rounded-xl bg-cyan-600 px-2 py-2 text-sm text-white hover:bg-cyan-500"
               >
                 <Plus size={14} /> Người
@@ -524,7 +740,13 @@ export default function AppShell() {
           </aside>
 
           <section className="min-h-[70vh] rounded-3xl border border-white/50 bg-white/70 p-2 shadow-lg backdrop-blur">
-            {viewMode === "graph" && <RelationshipGraph nodes={nodes} edges={edges} />}
+            {viewMode === "graph" && (
+              <RelationshipGraph
+                nodes={nodes}
+                edges={edges}
+                highlightedEdgeIds={highlightedEdgeIds}
+              />
+            )}
 
             {viewMode === "list" && (
               <div className="space-y-2 p-3">

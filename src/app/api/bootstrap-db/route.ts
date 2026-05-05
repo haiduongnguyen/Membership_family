@@ -17,6 +17,13 @@ const REQUIRED_TABLES = [
   "notes",
 ] as const;
 
+const MIGRATION_FILES = [
+  "001_init.sql",
+  "002_auth_trigger.sql",
+  "003_rls.sql",
+  "004_group_root_person.sql",
+] as const;
+
 async function readMigration(fileName: string) {
   const fullPath = path.join(process.cwd(), "supabase", "migrations", fileName);
   const sql = await fs.readFile(fullPath, "utf8");
@@ -77,18 +84,15 @@ export async function POST() {
     );
 
     const missingTables = tableChecks.filter((item) => !item.exists).map((item) => item.tableName);
-    if (missingTables.length === 0) {
-      return NextResponse.json({ ok: true, skipped: true });
-    }
-
-    const sql = [
-      await readMigration("001_init.sql"),
-      await readMigration("002_auth_trigger.sql"),
-      await readMigration("003_rls.sql"),
-    ].join("\n\n");
+    const sql = (await Promise.all(MIGRATION_FILES.map((file) => readMigration(file)))).join("\n\n");
     await client.query(sql);
+    await client.query("NOTIFY pgrst, 'reload schema'");
 
-    return NextResponse.json({ ok: true, createdMissingTables: missingTables });
+    return NextResponse.json({
+      ok: true,
+      skipped: missingTables.length === 0,
+      createdMissingTables: missingTables,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown bootstrap error";
     if (message.includes("getaddrinfo")) {

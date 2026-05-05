@@ -22,6 +22,7 @@ export interface RelationshipGroup {
   user_id: string;
   name: string;
   group_type: GroupType;
+  root_person_id: string | null;
   created_at: string;
 }
 
