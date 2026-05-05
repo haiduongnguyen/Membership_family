@@ -41,11 +41,13 @@ export async function createRelationship(
   groupId: string,
   sourceId: string,
   targetId: string,
-  relationType: RelationType
+  relationType: RelationType,
+  options?: { id?: string }
 ) {
   const { data, error } = await client
     .from("relationships")
     .insert({
+      ...(options?.id ? { id: options.id } : {}),
       group_id: groupId,
       source_person_id: sourceId,
       target_person_id: targetId,
@@ -56,4 +58,10 @@ export async function createRelationship(
 
   if (error) return { error: error.message };
   return { data: data as Relationship };
+}
+
+export async function deleteRelationship(client: SupabaseClient, relationshipId: string) {
+  const { error } = await client.from("relationships").delete().eq("id", relationshipId);
+  if (error) return { error: error.message };
+  return { ok: true };
 }

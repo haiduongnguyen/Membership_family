@@ -16,11 +16,13 @@ export async function fetchPersons(client: SupabaseClient, groupId: string) {
 export async function createPerson(
   client: SupabaseClient,
   groupId: string,
-  payload: PersonCreateInput
+  payload: PersonCreateInput,
+  options?: { id?: string }
 ) {
   const { data, error } = await client
     .from("persons")
     .insert({
+      ...(options?.id ? { id: options.id } : {}),
       group_id: groupId,
       full_name: payload.full_name,
       relationship_to_user: payload.relationship_to_user ?? "",
@@ -35,6 +37,12 @@ export async function createPerson(
 
 export async function updatePerson(client: SupabaseClient, person: Person) {
   const { error } = await client.from("persons").update(person).eq("id", person.id);
+  if (error) return { error: error.message };
+  return { ok: true };
+}
+
+export async function deletePerson(client: SupabaseClient, personId: string) {
+  const { error } = await client.from("persons").delete().eq("id", personId);
   if (error) return { error: error.message };
   return { ok: true };
 }

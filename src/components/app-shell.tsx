@@ -8,10 +8,11 @@ import type { EventItem, Person, Relationship, RelationshipGroup, RelationType }
 import AuthForm from "@/features/auth/components/AuthForm";
 import { useAuth } from "@/features/auth/hooks/useAuth";
 import { createGroupWithRoot, createPersonFromAnchor, deleteGroup, fetchGroups, renameGroup } from "@/features/groups/api";
-import { fetchPersons, updatePerson } from "@/features/persons/api";
+import { createPerson, deletePerson, fetchPersons, updatePerson } from "@/features/persons/api";
 import PersonDetailPanel from "@/features/persons/components/PersonDetailPanel";
 import {
   createRelationship,
+  deleteRelationship,
   fetchRelationships,
   relationshipExists,
   validateRelationshipInput,
@@ -36,6 +37,23 @@ import RelationshipFormDialog from "@/features/relationships/components/Relation
 import { bootstrapDatabaseIfNeeded } from "@/lib/bootstrap-db";
 
 type ViewMode = "graph" | "list" | "calendar" | "gallery";
+type GraphAction =
+  | {
+      type: "add_person_from_graph";
+      payload: {
+        groupId: string;
+        anchorPersonId: string;
+        person: Person;
+        relationship: Relationship;
+      };
+    }
+  | {
+      type: "add_relationship";
+      payload: {
+        groupId: string;
+        relationship: Relationship;
+      };
+    };
 
 const RELATION_LABELS: Record<RelationType, string> = {
   self: "Bản thân",
@@ -88,6 +106,10 @@ export default function AppShell() {
   const [openGroupMenuId, setOpenGroupMenuId] = useState<string | null>(null);
   const [isHiddenGroupsOpen, setIsHiddenGroupsOpen] = useState(false);
   const [groupPersonCount, setGroupPersonCount] = useState<Record<string, number>>({});
+  const [undoStack, setUndoStack] = useState<GraphAction[]>([]);
+  const [redoStack, setRedoStack] = useState<GraphAction[]>([]);
+  const [isReplayingAction, setIsReplayingAction] = useState(false);
+  const [isMobileGraph, setIsMobileGraph] = useState(false);
   const hasTriedBootstrapRef = useRef(false);
   const { pushToast } = useToast();
   const { userId, loading: isAuthLoading, message: authMessage, error: authError, login, register, logout } = useAuth(sb);
@@ -136,6 +158,8 @@ export default function AppShell() {
       setPeople(p.data ?? []);
       setRelationships(r.data ?? []);
       setEvents(e.data ?? []);
+      setUndoStack([]);
+      setRedoStack([]);
     });
   }, [activeGroupId, sb]);
 
@@ -160,6 +184,13 @@ export default function AppShell() {
         setGroupPersonCount(nextCount);
       });
   }, [groups, sb]);
+
+  useEffect(() => {
+    const update = () => setIsMobileGraph(window.innerWidth < 1024);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
 
   const filteredPeople = useMemo(
     () =>
@@ -271,6 +302,7 @@ export default function AppShell() {
       source: r.source_person_id,
       target: r.target_person_id,
       label: RELATION_LABELS[r.relation_type] ?? r.relation_type,
+      data: { relationType: r.relation_type },
     }));
 
   const visibleGroups = groups.slice(0, 5);
@@ -351,6 +383,114 @@ export default function AppShell() {
     pushToast("Đã xóa nhóm", "success");
   }
 
+  function pushGraphAction(action: GraphAction) {
+    setUndoStack((prev) => [...prev, action]);
+    setRedoStack([]);
+  }
+
+  async function undoGraphAction() {
+    if (!undoStack.length || isReplayingAction) return;
+    const action = undoStack[undoStack.length - 1];
+    setIsReplayingAction(true);
+
+    if (action.type === "add_person_from_graph") {
+      const relationshipDelete = await deleteRelationship(sb, action.payload.relationship.id);
+      if ("error" in relationshipDelete) {
+        pushToast(relationshipDelete.error ?? "Hoàn tác thất bại", "error");
+        setIsReplayingAction(false);
+        return;
+      }
+      const personDelete = await deletePerson(sb, action.payload.person.id);
+      if ("error" in personDelete) {
+        pushToast(personDelete.error ?? "Hoàn tác thất bại", "error");
+        setIsReplayingAction(false);
+        return;
+      }
+      setPeople((prev) => prev.filter((item) => item.id !== action.payload.person.id));
+      setRelationships((prev) => prev.filter((item) => item.id !== action.payload.relationship.id));
+      setGroupPersonCount((prev) => ({
+        ...prev,
+        [action.payload.groupId]: Math.max(0, (prev[action.payload.groupId] ?? 1) - 1),
+      }));
+      setSelectedPerson((prev) => (prev?.id === action.payload.person.id ? null : prev));
+    } else if (action.type === "add_relationship") {
+      const relationshipDelete = await deleteRelationship(sb, action.payload.relationship.id);
+      if ("error" in relationshipDelete) {
+        pushToast(relationshipDelete.error ?? "Hoàn tác thất bại", "error");
+        setIsReplayingAction(false);
+        return;
+      }
+      setRelationships((prev) => prev.filter((item) => item.id !== action.payload.relationship.id));
+    }
+
+    setUndoStack((prev) => prev.slice(0, -1));
+    setRedoStack((prev) => [...prev, action]);
+    setIsReplayingAction(false);
+    pushToast("Đã hoàn tác thao tác sơ đồ", "success");
+  }
+
+  async function redoGraphAction() {
+    if (!redoStack.length || isReplayingAction) return;
+    const action = redoStack[redoStack.length - 1];
+    setIsReplayingAction(true);
+
+    if (action.type === "add_person_from_graph") {
+      const personCreate = await createPerson(
+        sb,
+        action.payload.groupId,
+        {
+          full_name: action.payload.person.full_name,
+          relationship_to_user: action.payload.person.relationship_to_user ?? "",
+        },
+        { id: action.payload.person.id },
+      );
+      if (!personCreate.data) {
+        pushToast(personCreate.error ?? "Làm lại thất bại", "error");
+        setIsReplayingAction(false);
+        return;
+      }
+      const relationshipCreate = await createRelationship(
+        sb,
+        action.payload.groupId,
+        action.payload.anchorPersonId,
+        action.payload.person.id,
+        action.payload.relationship.relation_type,
+        { id: action.payload.relationship.id },
+      );
+      if (!relationshipCreate.data) {
+        pushToast(relationshipCreate.error ?? "Làm lại thất bại", "error");
+        setIsReplayingAction(false);
+        return;
+      }
+      setPeople((prev) => [...prev, personCreate.data as Person]);
+      setRelationships((prev) => [...prev, relationshipCreate.data as Relationship]);
+      setGroupPersonCount((prev) => ({
+        ...prev,
+        [action.payload.groupId]: (prev[action.payload.groupId] ?? 0) + 1,
+      }));
+    } else if (action.type === "add_relationship") {
+      const relationshipCreate = await createRelationship(
+        sb,
+        action.payload.groupId,
+        action.payload.relationship.source_person_id,
+        action.payload.relationship.target_person_id,
+        action.payload.relationship.relation_type,
+        { id: action.payload.relationship.id },
+      );
+      if (!relationshipCreate.data) {
+        pushToast(relationshipCreate.error ?? "Làm lại thất bại", "error");
+        setIsReplayingAction(false);
+        return;
+      }
+      setRelationships((prev) => [...prev, relationshipCreate.data as Relationship]);
+    }
+
+    setRedoStack((prev) => prev.slice(0, -1));
+    setUndoStack((prev) => [...prev, action]);
+    setIsReplayingAction(false);
+    pushToast("Đã làm lại thao tác sơ đồ", "success");
+  }
+
   function openQuickAdd(anchorPersonId: string | null, relationType: RelationType = "child") {
     if (!anchorPersonId) {
       pushToast("Nhóm này chưa có node gốc", "error");
@@ -384,6 +524,15 @@ export default function AppShell() {
       ...prev,
       [activeGroupId]: (prev[activeGroupId] ?? 0) + 1,
     }));
+    pushGraphAction({
+      type: "add_person_from_graph",
+      payload: {
+        groupId: activeGroupId,
+        anchorPersonId: quickAddAnchorId,
+        person,
+        relationship,
+      },
+    });
     setSelectedPerson(person);
     setQuickAddAnchorId(null);
     setQuickAddSubmitting(false);
@@ -420,7 +569,15 @@ export default function AppShell() {
 
     const result = await createRelationship(sb, activeGroupId, source, target, relationType);
     if (result.data) {
-      setRelationships((prev) => [...prev, result.data as Relationship]);
+      const created = result.data as Relationship;
+      setRelationships((prev) => [...prev, created]);
+      pushGraphAction({
+        type: "add_relationship",
+        payload: {
+          groupId: activeGroupId,
+          relationship: created,
+        },
+      });
       pushToast("Đã thêm quan hệ", "success");
     } else if (result.error) {
       pushToast(result.error ?? "Thêm quan hệ thất bại", "error");
@@ -722,6 +879,22 @@ export default function AppShell() {
               >
                 Mở tất cả
               </button>
+              <div className="ml-2 flex items-center gap-2">
+                <button
+                  onClick={() => void undoGraphAction()}
+                  disabled={!undoStack.length || isReplayingAction}
+                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50"
+                >
+                  Hoàn tác
+                </button>
+                <button
+                  onClick={() => void redoGraphAction()}
+                  disabled={!redoStack.length || isReplayingAction}
+                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50"
+                >
+                  Làm lại
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -787,6 +960,7 @@ export default function AppShell() {
                 nodes={nodes}
                 edges={edges}
                 highlightedEdgeIds={highlightedEdgeIds}
+                compactMode={isMobileGraph}
               />
             )}
 
