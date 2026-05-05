@@ -19,6 +19,7 @@ import {
 import { buildFamilyLayout } from "@/features/graph/layout/familyLayout";
 import RelationshipGraph from "@/features/graph/components/RelationshipGraph";
 import { findPathEdgeIds } from "@/features/graph/path";
+import { findVisiblePersonIdsByDepth } from "@/features/graph/depth";
 import {
   createEvent,
   fetchEvents,
@@ -81,6 +82,7 @@ export default function AppShell() {
   const [isRelationshipSubmitting, setIsRelationshipSubmitting] = useState(false);
   const [eventFilterPersonId, setEventFilterPersonId] = useState<string>("");
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  const [graphMaxDepth, setGraphMaxDepth] = useState(2);
   const [query, setQuery] = useState("");
   const [isBootstrappingDb, setIsBootstrappingDb] = useState(false);
   const [openGroupMenuId, setOpenGroupMenuId] = useState<string | null>(null);
@@ -169,15 +171,26 @@ export default function AppShell() {
     [people, query],
   );
 
-  const layoutPoints = useMemo(() => buildFamilyLayout(filteredPeople, relationships), [filteredPeople, relationships]);
-
   const rootPersonId = activeGroup?.root_person_id ?? people[0]?.id ?? null;
+  const visibleByDepth = useMemo(
+    () => findVisiblePersonIdsByDepth(relationships, rootPersonId, graphMaxDepth),
+    [relationships, rootPersonId, graphMaxDepth],
+  );
+  const graphPeople = useMemo(() => {
+    if (viewMode !== "graph") return filteredPeople;
+    if (!rootPersonId) return filteredPeople;
+    return filteredPeople.filter((person) => visibleByDepth.has(person.id));
+  }, [filteredPeople, visibleByDepth, viewMode, rootPersonId]);
+  const layoutPoints = useMemo(
+    () => buildFamilyLayout(graphPeople, relationships, rootPersonId),
+    [graphPeople, relationships, rootPersonId],
+  );
   const highlightedEdgeIds = useMemo(
     () => findPathEdgeIds(relationships, rootPersonId, selectedPerson?.id ?? null),
     [relationships, rootPersonId, selectedPerson?.id],
   );
 
-  const nodes: Node[] = filteredPeople.map((p) => {
+  const nodes: Node[] = graphPeople.map((p) => {
     const point = layoutPoints.find((x) => x.id === p.id) ?? { x: 0, y: 0 };
     const isSelected = selectedPerson?.id === p.id;
     return {
@@ -252,7 +265,7 @@ export default function AppShell() {
   });
 
   const edges: Edge[] = relationships
-    .filter((r) => filteredPeople.some((p) => p.id === r.source_person_id) && filteredPeople.some((p) => p.id === r.target_person_id))
+    .filter((r) => graphPeople.some((p) => p.id === r.source_person_id) && graphPeople.some((p) => p.id === r.target_person_id))
     .map((r) => ({
       id: r.id,
       source: r.source_person_id,
@@ -682,6 +695,35 @@ export default function AppShell() {
             </div>
           </div>
           <div className="text-sm text-slate-600">Chạm vào một box để mở nhóm tương ứng, sau đó thêm người trực tiếp từ node trên sơ đồ.</div>
+          {viewMode === "graph" && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-slate-700">Độ sâu hiển thị:</span>
+              <button
+                onClick={() => setGraphMaxDepth(1)}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${graphMaxDepth === 1 ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700"}`}
+              >
+                1 bậc
+              </button>
+              <button
+                onClick={() => setGraphMaxDepth(2)}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${graphMaxDepth === 2 ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700"}`}
+              >
+                2 bậc
+              </button>
+              <button
+                onClick={() => setGraphMaxDepth(3)}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${graphMaxDepth === 3 ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700"}`}
+              >
+                3 bậc
+              </button>
+              <button
+                onClick={() => setGraphMaxDepth(99)}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${graphMaxDepth >= 99 ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700"}`}
+              >
+                Mở tất cả
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[300px_1fr_340px]">
