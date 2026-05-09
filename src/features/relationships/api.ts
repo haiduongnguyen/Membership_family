@@ -65,3 +65,23 @@ export async function deleteRelationship(client: SupabaseClient, relationshipId:
   if (error) return { error: error.message };
   return { ok: true };
 }
+
+export async function updateRelationship(
+  client: SupabaseClient,
+  relationshipId: string,
+  input: {
+    source_person_id: string;
+    target_person_id: string;
+    relation_type: RelationType;
+  },
+) {
+  const { data, error } = await client
+    .from("relationships")
+    .update(input)
+    .eq("id", relationshipId)
+    .select()
+    .single();
+
+  if (error) return { error: error.message };
+  return { data: data as Relationship };
+}

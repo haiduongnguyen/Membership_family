@@ -56,12 +56,47 @@ function calcGeneration(rootId: string, people: Person[], rels: Relationship[]) 
   return levels;
 }
 
+function buildNeighborsByPersonId(relationships: Relationship[]) {
+  const neighbors = new Map<string, Set<string>>();
+  for (const rel of relationships) {
+    const a = neighbors.get(rel.source_person_id) ?? new Set<string>();
+    a.add(rel.target_person_id);
+    neighbors.set(rel.source_person_id, a);
+
+    const b = neighbors.get(rel.target_person_id) ?? new Set<string>();
+    b.add(rel.source_person_id);
+    neighbors.set(rel.target_person_id, b);
+  }
+  return neighbors;
+}
+
+function reorderLevelByBarycenter(
+  row: Person[],
+  neighborOrder: Map<string, number>,
+  neighborsByPersonId: Map<string, Set<string>>,
+) {
+  return row.slice().sort((a, b) => {
+    const aNeighbors = [...(neighborsByPersonId.get(a.id) ?? new Set<string>())];
+    const bNeighbors = [...(neighborsByPersonId.get(b.id) ?? new Set<string>())];
+
+    const aVals = aNeighbors.map((id) => neighborOrder.get(id)).filter((v): v is number => typeof v === "number");
+    const bVals = bNeighbors.map((id) => neighborOrder.get(id)).filter((v): v is number => typeof v === "number");
+
+    const aAvg = aVals.length ? aVals.reduce((sum, x) => sum + x, 0) / aVals.length : Number.MAX_SAFE_INTEGER;
+    const bAvg = bVals.length ? bVals.reduce((sum, x) => sum + x, 0) / bVals.length : Number.MAX_SAFE_INTEGER;
+
+    if (aAvg !== bAvg) return aAvg - bAvg;
+    return a.full_name.localeCompare(b.full_name, "vi");
+  });
+}
+
 export function buildFamilyLayout(people: Person[], relationships: Relationship[], rootPersonId?: string | null): GraphPoint[] {
   if (!people.length) return [];
 
   const rootId = rootPersonId ?? people[0].id;
   const levels = calcGeneration(rootId, people, relationships);
   const byLevel = new Map<number, Person[]>();
+  const neighborsByPersonId = buildNeighborsByPersonId(relationships);
 
   for (const person of people) {
     const level = levels.get(person.id) ?? 0;
@@ -70,16 +105,31 @@ export function buildFamilyLayout(people: Person[], relationships: Relationship[
     byLevel.set(level, list);
   }
 
-  const points: GraphPoint[] = [];
   const sortedLevels = Array.from(byLevel.keys()).sort((a, b) => b - a);
+  const orderedRows = new Map<number, Person[]>();
 
+  for (let i = 0; i < sortedLevels.length; i += 1) {
+    const level = sortedLevels[i];
+    const row = byLevel.get(level) ?? [];
+    if (i === 0) {
+      orderedRows.set(level, row.slice().sort((a, b) => a.full_name.localeCompare(b.full_name, "vi")));
+      continue;
+    }
+    const prevLevel = sortedLevels[i - 1];
+    const prevRow = orderedRows.get(prevLevel) ?? [];
+    const prevOrder = new Map<string, number>(prevRow.map((person, idx) => [person.id, idx]));
+    orderedRows.set(level, reorderLevelByBarycenter(row, prevOrder, neighborsByPersonId));
+  }
+
+  const points: GraphPoint[] = [];
+  const topLevel = sortedLevels[0];
   for (const level of sortedLevels) {
-    const row = (byLevel.get(level) ?? []).slice().sort((a, b) => a.full_name.localeCompare(b.full_name, "vi"));
+    const row = orderedRows.get(level) ?? [];
     row.forEach((person, idx) => {
       points.push({
         id: person.id,
-        x: idx * 220,
-        y: (sortedLevels[0] - level) * 150,
+        x: idx * 230,
+        y: (topLevel - level) * 170,
       });
     });
   }

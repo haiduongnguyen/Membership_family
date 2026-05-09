@@ -1,75 +1,106 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Handle, Position, type Connection, type Edge, type Node } from "@xyflow/react";
-import { CalendarDays, GalleryHorizontal, GitBranch, List, LogOut, MoreHorizontal, Plus, Search, Users, X } from "lucide-react";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase";
-import type { EventItem, Person, Relationship, RelationshipGroup, RelationType } from "@/lib/models";
+import { useMemo, useState } from "react";
+import { Archive, Building2, CalendarDays, LogOut, Plus, Search, Users } from "lucide-react";
 import AuthForm from "@/features/auth/components/AuthForm";
 import { useAuth } from "@/features/auth/hooks/useAuth";
-import { createGroupWithRoot, createPersonFromAnchor, deleteGroup, fetchGroups, renameGroup } from "@/features/groups/api";
-import { createPerson, deletePerson, fetchPersons, updatePerson } from "@/features/persons/api";
-import PersonDetailPanel from "@/features/persons/components/PersonDetailPanel";
-import {
-  createRelationship,
-  deleteRelationship,
-  fetchRelationships,
-  relationshipExists,
-  validateRelationshipInput,
-} from "@/features/relationships/api";
-import { buildFamilyLayout } from "@/features/graph/layout/familyLayout";
-import RelationshipGraph from "@/features/graph/components/RelationshipGraph";
-import { findPathEdgeIds } from "@/features/graph/path";
-import { findVisiblePersonIdsByDepth } from "@/features/graph/depth";
-import {
-  createEvent,
-  fetchEvents,
-  mapEventsToCalendar,
-  updateEventPhoto,
-} from "@/features/events/api";
-import EventCalendar from "@/features/events/components/EventCalendar";
-import EventFormDialog from "@/features/events/components/EventFormDialog";
-import GalleryView from "@/features/media/components/GalleryView";
-import ImageUploader from "@/features/media/components/ImageUploader";
-import { uploadEventImage, uploadPersonAvatar } from "@/features/media/api";
-import { useToast } from "@/components/app/toast";
-import RelationshipFormDialog from "@/features/relationships/components/RelationshipFormDialog";
-import { bootstrapDatabaseIfNeeded } from "@/lib/bootstrap-db";
+import { hasSupabaseEnv, supabase } from "@/lib/supabase";
+import { getMockCommunityGraph } from "@/features/community/mock";
+import StoryMapCanvas from "@/features/community/components/StoryMapCanvas";
+import RadialView from "@/features/community/components/RadialView";
+import ListView from "@/features/community/components/ListView";
+import TimelineView from "@/features/community/components/TimelineView";
+import ClusterView from "@/features/community/components/ClusterView";
 
-type ViewMode = "graph" | "list" | "calendar" | "gallery";
-type GraphAction =
-  | {
-      type: "add_person_from_graph";
-      payload: {
-        groupId: string;
-        anchorPersonId: string;
-        person: Person;
-        relationship: Relationship;
-      };
-    }
-  | {
-      type: "add_relationship";
-      payload: {
-        groupId: string;
-        relationship: Relationship;
-      };
-    };
+type CommunityType = "family" | "company" | "friends" | "clan" | "other";
+type CommunityStatus = "active" | "archived";
 
-const RELATION_LABELS: Record<RelationType, string> = {
-  self: "Bản thân",
-  father: "Bố",
-  mother: "Mẹ",
-  sibling: "Anh/chị/em ruột",
-  grandparent: "Ông/bà",
-  uncle_aunt: "Bác/cô/chú/dì/cậu",
-  cousin: "Anh/chị/em họ",
-  spouse: "Vợ/chồng",
-  child: "Con",
-  friend: "Bạn bè",
-  colleague: "Đồng nghiệp",
-  manager: "Quản lý",
-  employee: "Nhân viên",
+type Community = {
+  id: string;
+  name: string;
+  type: CommunityType;
+  description: string;
+  members: number;
+  events: number;
+  updatedAt: string;
+  status: CommunityStatus;
+  cover: string;
 };
+
+type HubTab = "all" | CommunityType | "archived";
+type ViewMode = "tree" | "radial" | "list" | "timeline" | "cluster";
+
+const MOCK_COMMUNITIES: Community[] = [
+  {
+    id: "c1",
+    name: "Gia đình nhỏ",
+    type: "family",
+    description: "Gia đình gần và các dịp sinh nhật hàng năm.",
+    members: 24,
+    events: 8,
+    updatedAt: "Hôm nay",
+    status: "active",
+    cover: "from-cyan-400 via-sky-400 to-blue-500",
+  },
+  {
+    id: "c2",
+    name: "Dòng họ nội",
+    type: "clan",
+    description: "Nhánh bên nội và lịch giỗ, lễ Tết.",
+    members: 116,
+    events: 34,
+    updatedAt: "2 ngày trước",
+    status: "active",
+    cover: "from-emerald-400 via-teal-400 to-cyan-500",
+  },
+  {
+    id: "c3",
+    name: "Bạn đại học",
+    type: "friends",
+    description: "Nhóm bạn thân, du lịch và họp lớp.",
+    members: 19,
+    events: 12,
+    updatedAt: "5 ngày trước",
+    status: "active",
+    cover: "from-orange-400 via-rose-400 to-pink-500",
+  },
+  {
+    id: "c4",
+    name: "Công ty A - Team Product",
+    type: "company",
+    description: "Cơ cấu team và các mốc dự án.",
+    members: 47,
+    events: 21,
+    updatedAt: "Hôm qua",
+    status: "active",
+    cover: "from-violet-400 via-indigo-400 to-blue-500",
+  },
+  {
+    id: "c5",
+    name: "Nhóm cũ đã lưu trữ",
+    type: "other",
+    description: "Tạm ẩn khỏi danh sách chính.",
+    members: 10,
+    events: 2,
+    updatedAt: "1 tháng trước",
+    status: "archived",
+    cover: "from-slate-400 via-slate-500 to-slate-600",
+  },
+];
+
+function typeLabel(type: CommunityType) {
+  if (type === "family") return "Gia đình";
+  if (type === "company") return "Công ty";
+  if (type === "friends") return "Bạn bè";
+  if (type === "clan") return "Dòng họ";
+  return "Nhóm khác";
+}
+
+function tabLabel(tab: HubTab) {
+  if (tab === "all") return "Tất cả";
+  if (tab === "archived") return "Đã lưu trữ";
+  return typeLabel(tab);
+}
 
 export default function AppShell() {
   if (!hasSupabaseEnv || !supabase) {
@@ -83,959 +114,221 @@ export default function AppShell() {
   }
 
   const sb = supabase;
-  const [groups, setGroups] = useState<RelationshipGroup[]>([]);
-  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
-  const [people, setPeople] = useState<Person[]>([]);
-  const [relationships, setRelationships] = useState<Relationship[]>([]);
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [selectedPerson, setSelectedPerson] = useState<Person | null>(null);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [quickAddAnchorId, setQuickAddAnchorId] = useState<string | null>(null);
-  const [quickAddName, setQuickAddName] = useState("");
-  const [quickAddRelationType, setQuickAddRelationType] = useState<RelationType>("child");
-  const [quickAddSubmitting, setQuickAddSubmitting] = useState(false);
-  const [isEventDialogOpen, setIsEventDialogOpen] = useState(false);
-  const [isEventSubmitting, setIsEventSubmitting] = useState(false);
-  const [isRelationshipDialogOpen, setIsRelationshipDialogOpen] = useState(false);
-  const [isRelationshipSubmitting, setIsRelationshipSubmitting] = useState(false);
-  const [eventFilterPersonId, setEventFilterPersonId] = useState<string>("");
-  const [viewMode, setViewMode] = useState<ViewMode>("graph");
-  const [graphMaxDepth, setGraphMaxDepth] = useState(2);
-  const [query, setQuery] = useState("");
-  const [isBootstrappingDb, setIsBootstrappingDb] = useState(false);
-  const [openGroupMenuId, setOpenGroupMenuId] = useState<string | null>(null);
-  const [isHiddenGroupsOpen, setIsHiddenGroupsOpen] = useState(false);
-  const [groupPersonCount, setGroupPersonCount] = useState<Record<string, number>>({});
-  const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>({});
-  const [pendingRelation, setPendingRelation] = useState<{ sourceId: string; targetId: string } | null>(null);
-  const [undoStack, setUndoStack] = useState<GraphAction[]>([]);
-  const [redoStack, setRedoStack] = useState<GraphAction[]>([]);
-  const [isReplayingAction, setIsReplayingAction] = useState(false);
-  const [isMobileGraph, setIsMobileGraph] = useState(false);
-  const hasTriedBootstrapRef = useRef(false);
-  const { pushToast } = useToast();
   const { userId, loading: isAuthLoading, message: authMessage, error: authError, login, register, logout } = useAuth(sb);
-  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? null;
 
-  async function ensureDbSchemaOnce() {
-    if (isBootstrappingDb || hasTriedBootstrapRef.current) return false;
-    hasTriedBootstrapRef.current = true;
-    setIsBootstrappingDb(true);
-    const bootstrapResult = await bootstrapDatabaseIfNeeded();
-    setIsBootstrappingDb(false);
-    if ("error" in bootstrapResult) {
-      pushToast(`Khởi tạo cơ sở dữ liệu thất bại: ${bootstrapResult.error}`, "error");
-      return false;
-    }
-    pushToast("Đã cập nhật cấu trúc dữ liệu. Đang thử lại...", "success");
-    return true;
-  }
+  const [query, setQuery] = useState("");
+  const [tab, setTab] = useState<HubTab>("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("tree");
+  const [communities, setCommunities] = useState<Community[]>(MOCK_COMMUNITIES);
+  const [activeCommunityId, setActiveCommunityId] = useState<string | null>(MOCK_COMMUNITIES[0]?.id ?? null);
 
-  useEffect(() => {
-    if (!userId) return;
-    fetchGroups(sb, userId).then(async (result) => {
-      if (result.error?.includes("root_person_id") || result.error?.includes("relationship_groups")) {
-        const bootstrapped = await ensureDbSchemaOnce();
-        if (!bootstrapped) return;
-        const retry = await fetchGroups(sb, userId);
-        const retryList = retry.data ?? [];
-        setGroups(retryList);
-        if (retryList.length) setActiveGroupId((prev) => prev ?? retryList[0].id);
-        return;
-      }
-
-      const list = result.data ?? [];
-      setGroups(list);
-      if (list.length) setActiveGroupId((prev) => prev ?? list[0].id);
+  const filteredCommunities = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return communities.filter((community) => {
+      const matchText = !q || community.name.toLowerCase().includes(q) || community.description.toLowerCase().includes(q);
+      const matchTab =
+        tab === "all"
+          ? community.status === "active"
+          : tab === "archived"
+            ? community.status === "archived"
+            : community.type === tab && community.status === "active";
+      return matchText && matchTab;
     });
-  }, [userId, sb, pushToast]);
+  }, [communities, query, tab]);
 
-  useEffect(() => {
-    if (!activeGroupId) return;
-    void Promise.all([
-      fetchPersons(sb, activeGroupId),
-      fetchRelationships(sb, activeGroupId),
-      fetchEvents(sb, activeGroupId),
-    ]).then(([p, r, e]) => {
-      setPeople(p.data ?? []);
-      setRelationships(r.data ?? []);
-      setEvents(e.data ?? []);
-      setNodePositions({});
-      setUndoStack([]);
-      setRedoStack([]);
-    });
-  }, [activeGroupId, sb]);
-
-  useEffect(() => {
-    if (!groups.length) {
-      setGroupPersonCount({});
-      return;
-    }
-    const groupIds = groups.map((group) => group.id);
-    sb.from("persons")
-      .select("group_id")
-      .in("group_id", groupIds)
-      .then(({ data, error }) => {
-        if (error || !data) return;
-        const nextCount = groupIds.reduce<Record<string, number>>((acc, id) => {
-          acc[id] = 0;
-          return acc;
-        }, {});
-        for (const item of data as { group_id: string }[]) {
-          nextCount[item.group_id] = (nextCount[item.group_id] ?? 0) + 1;
-        }
-        setGroupPersonCount(nextCount);
-      });
-  }, [groups, sb]);
-
-  useEffect(() => {
-    const update = () => setIsMobileGraph(window.innerWidth < 1024);
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, []);
-
-  const filteredPeople = useMemo(
-    () =>
-      people.filter(
-        (p) =>
-          p.full_name.toLowerCase().includes(query.toLowerCase()) ||
-          (p.relationship_to_user ?? "").toLowerCase().includes(query.toLowerCase()),
-      ),
-    [people, query],
+  const activeCommunity = communities.find((community) => community.id === activeCommunityId) ?? null;
+  const activeGraph = useMemo(
+    () => (activeCommunity ? getMockCommunityGraph(activeCommunity.type) : null),
+    [activeCommunity],
   );
-
-  const rootPersonId = activeGroup?.root_person_id ?? people[0]?.id ?? null;
-  const visibleByDepth = useMemo(
-    () => findVisiblePersonIdsByDepth(relationships, rootPersonId, graphMaxDepth),
-    [relationships, rootPersonId, graphMaxDepth],
-  );
-  const graphPeople = useMemo(() => {
-    if (viewMode !== "graph") return filteredPeople;
-    if (!rootPersonId) return filteredPeople;
-    return filteredPeople.filter((person) => visibleByDepth.has(person.id));
-  }, [filteredPeople, visibleByDepth, viewMode, rootPersonId]);
-  const layoutPoints = useMemo(
-    () => buildFamilyLayout(graphPeople, relationships, rootPersonId),
-    [graphPeople, relationships, rootPersonId],
-  );
-  const highlightedEdgeIds = useMemo(
-    () => findPathEdgeIds(relationships, rootPersonId, selectedPerson?.id ?? null),
-    [relationships, rootPersonId, selectedPerson?.id],
-  );
-
-  function getAgeLabel(birthDate: string | null) {
-    if (!birthDate) return "Chưa rõ tuổi";
-    const d = new Date(birthDate);
-    if (Number.isNaN(d.getTime())) return "Chưa rõ tuổi";
-    const today = new Date();
-    let age = today.getFullYear() - d.getFullYear();
-    const m = today.getMonth() - d.getMonth();
-    if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age -= 1;
-    return `${Math.max(age, 0)} tuổi`;
-  }
-
-  function getInitials(name: string) {
-    const parts = name.trim().split(/\s+/).filter(Boolean);
-    if (!parts.length) return "?";
-    return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
-  }
-
-  const nodes: Node[] = graphPeople.map((p) => {
-    const point = layoutPoints.find((x) => x.id === p.id) ?? { x: 0, y: 0 };
-    const manualPosition = nodePositions[p.id];
-    const isSelected = selectedPerson?.id === p.id;
-    return {
-      id: p.id,
-      position: manualPosition ?? { x: point.x, y: point.y },
-      data: {
-        label: (
-          <div
-            className={`relative w-56 rounded-2xl border bg-white px-3 py-2 text-left shadow-sm transition hover:shadow-md ${
-              isSelected ? "border-cyan-500 ring-2 ring-cyan-100" : "border-slate-200"
-            }`}
-            onClick={() => setSelectedPerson(p)}
-          >
-            <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !border !border-cyan-600 !bg-white" />
-            <Handle type="source" position={Position.Right} className="!h-2.5 !w-2.5 !border !border-cyan-600 !bg-cyan-500" />
-            <div className="flex items-center gap-2">
-              {p.avatar_url ? (
-                <img src={p.avatar_url} alt={p.full_name} className="h-9 w-9 rounded-full object-cover" />
-              ) : (
-                <div className="grid h-9 w-9 place-items-center rounded-full bg-cyan-100 text-xs font-bold text-cyan-700">
-                  {getInitials(p.full_name)}
-                </div>
-              )}
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900">{p.full_name}</p>
-                <p className="truncate text-xs text-slate-500">{getAgeLabel(p.birth_date)}</p>
-              </div>
-            </div>
-          </div>
-        ),
-      },
-    };
-  });
-
-  const edges: Edge[] = relationships
-    .filter((r) => graphPeople.some((p) => p.id === r.source_person_id) && graphPeople.some((p) => p.id === r.target_person_id))
-    .map((r) => ({
-      id: r.id,
-      source: r.source_person_id,
-      target: r.target_person_id,
-      label: RELATION_LABELS[r.relation_type] ?? r.relation_type,
-      data: { relationType: r.relation_type },
-    }));
-
-  const visibleGroups = groups.slice(0, 5);
-  const hiddenGroups = groups.slice(5);
-
-  async function createNewGroup() {
-    if (!userId) return;
-    const inputName = window.prompt("Nhập tên nhóm mới:", "Nhóm mới");
-    const groupName = inputName?.trim();
-    if (!groupName) return;
-    const result = await createGroupWithRoot(sb, userId, groupName, "other", "Tôi");
-    if (result.data) {
-      setGroups((prev) => [...prev, result.data as RelationshipGroup]);
-      setGroupPersonCount((prev) => ({ ...prev, [result.data.id]: 1 }));
-      setActiveGroupId(result.data.id);
-      pushToast(`Đã tạo nhóm "${groupName}"`, "success");
-    } else if (result.error) {
-      if (result.error.includes("root_person_id")) {
-        const bootstrapped = await ensureDbSchemaOnce();
-        if (bootstrapped) {
-          const retry = await createGroupWithRoot(sb, userId, groupName, "other", "Tôi");
-          if (retry.data) {
-            setGroups((prev) => [...prev, retry.data as RelationshipGroup]);
-            setGroupPersonCount((prev) => ({ ...prev, [retry.data.id]: 1 }));
-            setActiveGroupId(retry.data.id);
-            pushToast(`Đã tạo nhóm "${groupName}"`, "success");
-            return;
-          }
-          pushToast(retry.error ?? "Tạo nhóm thất bại", "error");
-          return;
-        }
-      }
-      pushToast(result.error ?? "Tạo nhóm thất bại", "error");
-    }
-  }
-
-  async function renameGroupById(groupId: string) {
-    const current = groups.find((group) => group.id === groupId);
-    if (!current) return;
-    const inputName = window.prompt("Đổi tên nhóm:", current.name);
-    const nextName = inputName?.trim();
-    if (!nextName || nextName === current.name) return;
-    const result = await renameGroup(sb, groupId, nextName);
-    if (result.data) {
-      setGroups((prev) => prev.map((group) => (group.id === groupId ? { ...group, name: nextName } : group)));
-      pushToast("Đã đổi tên nhóm", "success");
-    } else if (result.error) {
-      pushToast(result.error ?? "Đổi tên nhóm thất bại", "error");
-    }
-  }
-
-  async function deleteGroupById(groupId: string) {
-    if (groups.length <= 1) {
-      pushToast("Cần giữ lại ít nhất 1 nhóm", "error");
-      return;
-    }
-    const current = groups.find((group) => group.id === groupId);
-    if (!current) return;
-    const confirmed = window.confirm(
-      `Xóa nhóm "${current.name}"? Hành động này sẽ xóa toàn bộ thành viên, quan hệ và sự kiện của nhóm.`,
-    );
-    if (!confirmed) return;
-    const result = await deleteGroup(sb, groupId);
-    if ("error" in result) {
-      pushToast(result.error ?? "Xóa nhóm thất bại", "error");
-      return;
-    }
-    const nextGroups = groups.filter((group) => group.id !== groupId);
-    setGroups(nextGroups);
-    setGroupPersonCount((prev) => {
-      const next = { ...prev };
-      delete next[groupId];
-      return next;
-    });
-    if (activeGroupId === groupId) {
-      setActiveGroupId(nextGroups[0]?.id ?? null);
-    }
-    pushToast("Đã xóa nhóm", "success");
-  }
-
-  function pushGraphAction(action: GraphAction) {
-    setUndoStack((prev) => [...prev, action]);
-    setRedoStack([]);
-  }
-
-  async function undoGraphAction() {
-    if (!undoStack.length || isReplayingAction) return;
-    const action = undoStack[undoStack.length - 1];
-    setIsReplayingAction(true);
-
-    if (action.type === "add_person_from_graph") {
-      const relationshipDelete = await deleteRelationship(sb, action.payload.relationship.id);
-      if ("error" in relationshipDelete) {
-        pushToast(relationshipDelete.error ?? "Hoàn tác thất bại", "error");
-        setIsReplayingAction(false);
-        return;
-      }
-      const personDelete = await deletePerson(sb, action.payload.person.id);
-      if ("error" in personDelete) {
-        pushToast(personDelete.error ?? "Hoàn tác thất bại", "error");
-        setIsReplayingAction(false);
-        return;
-      }
-      setPeople((prev) => prev.filter((item) => item.id !== action.payload.person.id));
-      setRelationships((prev) => prev.filter((item) => item.id !== action.payload.relationship.id));
-      setGroupPersonCount((prev) => ({
-        ...prev,
-        [action.payload.groupId]: Math.max(0, (prev[action.payload.groupId] ?? 1) - 1),
-      }));
-      setSelectedPerson((prev) => (prev?.id === action.payload.person.id ? null : prev));
-    } else if (action.type === "add_relationship") {
-      const relationshipDelete = await deleteRelationship(sb, action.payload.relationship.id);
-      if ("error" in relationshipDelete) {
-        pushToast(relationshipDelete.error ?? "Hoàn tác thất bại", "error");
-        setIsReplayingAction(false);
-        return;
-      }
-      setRelationships((prev) => prev.filter((item) => item.id !== action.payload.relationship.id));
-    }
-
-    setUndoStack((prev) => prev.slice(0, -1));
-    setRedoStack((prev) => [...prev, action]);
-    setIsReplayingAction(false);
-    pushToast("Đã hoàn tác thao tác sơ đồ", "success");
-  }
-
-  async function redoGraphAction() {
-    if (!redoStack.length || isReplayingAction) return;
-    const action = redoStack[redoStack.length - 1];
-    setIsReplayingAction(true);
-
-    if (action.type === "add_person_from_graph") {
-      const personCreate = await createPerson(
-        sb,
-        action.payload.groupId,
-        {
-          full_name: action.payload.person.full_name,
-          relationship_to_user: action.payload.person.relationship_to_user ?? "",
-        },
-        { id: action.payload.person.id },
-      );
-      if (!personCreate.data) {
-        pushToast(personCreate.error ?? "Làm lại thất bại", "error");
-        setIsReplayingAction(false);
-        return;
-      }
-      const relationshipCreate = await createRelationship(
-        sb,
-        action.payload.groupId,
-        action.payload.anchorPersonId,
-        action.payload.person.id,
-        action.payload.relationship.relation_type,
-        { id: action.payload.relationship.id },
-      );
-      if (!relationshipCreate.data) {
-        pushToast(relationshipCreate.error ?? "Làm lại thất bại", "error");
-        setIsReplayingAction(false);
-        return;
-      }
-      setPeople((prev) => [...prev, personCreate.data as Person]);
-      setRelationships((prev) => [...prev, relationshipCreate.data as Relationship]);
-      setGroupPersonCount((prev) => ({
-        ...prev,
-        [action.payload.groupId]: (prev[action.payload.groupId] ?? 0) + 1,
-      }));
-    } else if (action.type === "add_relationship") {
-      const relationshipCreate = await createRelationship(
-        sb,
-        action.payload.groupId,
-        action.payload.relationship.source_person_id,
-        action.payload.relationship.target_person_id,
-        action.payload.relationship.relation_type,
-        { id: action.payload.relationship.id },
-      );
-      if (!relationshipCreate.data) {
-        pushToast(relationshipCreate.error ?? "Làm lại thất bại", "error");
-        setIsReplayingAction(false);
-        return;
-      }
-      setRelationships((prev) => [...prev, relationshipCreate.data as Relationship]);
-    }
-
-    setRedoStack((prev) => prev.slice(0, -1));
-    setUndoStack((prev) => [...prev, action]);
-    setIsReplayingAction(false);
-    pushToast("Đã làm lại thao tác sơ đồ", "success");
-  }
-
-  function openQuickAdd(anchorPersonId: string | null, relationType: RelationType = "child") {
-    if (!anchorPersonId) {
-      pushToast("Nhóm này chưa có node gốc", "error");
-      return;
-    }
-    setQuickAddAnchorId(anchorPersonId);
-    setQuickAddName("");
-    setQuickAddRelationType(relationType);
-  }
-
-  function handleNodePositionChange(nodeId: string, position: { x: number; y: number }) {
-    setNodePositions((prev) => ({ ...prev, [nodeId]: position }));
-  }
-
-  function handleConnectNodes(connection: Connection) {
-    if (!connection.source || !connection.target) return;
-    if (connection.source === connection.target) return;
-    setPendingRelation({ sourceId: connection.source, targetId: connection.target });
-    setIsRelationshipDialogOpen(true);
-  }
-
-  async function submitQuickAdd() {
-    if (!activeGroupId || !quickAddAnchorId || !quickAddName.trim()) return;
-    setQuickAddSubmitting(true);
-    const result = await createPersonFromAnchor(
-      sb,
-      activeGroupId,
-      quickAddAnchorId,
-      quickAddName.trim(),
-      quickAddRelationType,
-    );
-    if ("error" in result) {
-      pushToast(result.error ?? "Thêm thành viên thất bại", "error");
-      setQuickAddSubmitting(false);
-      return;
-    }
-    const person = result.data.person as Person;
-    const relationship = result.data.relationship as Relationship;
-    setPeople((prev) => [...prev, person]);
-    setRelationships((prev) => [...prev, relationship]);
-    setGroupPersonCount((prev) => ({
-      ...prev,
-      [activeGroupId]: (prev[activeGroupId] ?? 0) + 1,
-    }));
-    pushGraphAction({
-      type: "add_person_from_graph",
-      payload: {
-        groupId: activeGroupId,
-        anchorPersonId: quickAddAnchorId,
-        person,
-        relationship,
-      },
-    });
-    setSelectedPerson(person);
-    setQuickAddAnchorId(null);
-    setQuickAddSubmitting(false);
-    pushToast("Đã thêm thành viên từ sơ đồ", "success");
-  }
-
-  async function addRelationship() {
-    if (!activeGroupId || people.length < 2) return;
-    setPendingRelation(null);
-    setIsRelationshipDialogOpen(true);
-  }
-
-  async function handleCreateRelationship(input: { sourceId: string; targetId: string; relationType: RelationType }) {
-    if (!activeGroupId) return;
-    setIsRelationshipSubmitting(true);
-
-    const { sourceId: source, targetId: target, relationType } = input;
-    const validation = validateRelationshipInput({
-      source_person_id: source,
-      target_person_id: target,
-      relation_type: relationType,
-    });
-
-    if ("error" in validation) {
-      pushToast(validation.error ?? "Dữ liệu quan hệ không hợp lệ", "error");
-      setIsRelationshipSubmitting(false);
-      return;
-    }
-
-    if (relationshipExists(relationships, source, target, relationType)) {
-      pushToast("Quan hệ đã tồn tại", "error");
-      setIsRelationshipSubmitting(false);
-      return;
-    }
-
-    const result = await createRelationship(sb, activeGroupId, source, target, relationType);
-    if (result.data) {
-      const created = result.data as Relationship;
-      setRelationships((prev) => [...prev, created]);
-      pushGraphAction({
-        type: "add_relationship",
-        payload: {
-          groupId: activeGroupId,
-          relationship: created,
-        },
-      });
-      pushToast("Đã thêm quan hệ", "success");
-    } else if (result.error) {
-      pushToast(result.error ?? "Thêm quan hệ thất bại", "error");
-    }
-
-    setIsRelationshipSubmitting(false);
-    setPendingRelation(null);
-  }
-
-  async function addEvent() {
-    if (!activeGroupId) return;
-    setIsEventDialogOpen(true);
-  }
-
-  async function handleCreateEvent(input: {
-    title: string;
-    event_date: string;
-    recurrence: "once" | "monthly" | "yearly";
-    person_id: string | null;
-    description?: string;
-  }) {
-    if (!activeGroupId) return;
-    setIsEventSubmitting(true);
-    try {
-      const result = await createEvent(sb, activeGroupId, input);
-      if (result.data) {
-        setEvents((prev) => [...prev, result.data as EventItem]);
-        pushToast("Đã thêm sự kiện", "success");
-      } else if (result.error) {
-        pushToast(result.error ?? "Thêm sự kiện thất bại", "error");
-      }
-    } finally {
-      setIsEventSubmitting(false);
-    }
-  }
-
-  async function savePerson(person: Person) {
-    await updatePerson(sb, person);
-    setPeople((prev) => prev.map((x) => (x.id === person.id ? person : x)));
-    pushToast("Đã cập nhật hồ sơ", "success");
-  }
-
-  async function uploadAvatar(personId: string, file: File) {
-    const uploaded = await uploadPersonAvatar(sb, personId, file);
-    if (!("publicUrl" in uploaded)) {
-      pushToast(uploaded.error ?? "Tải ảnh thất bại", "error");
-      return;
-    }
-
-    const person = people.find((p) => p.id === personId);
-    if (!person) return;
-
-    const updated = { ...person, avatar_url: uploaded.publicUrl };
-    await savePerson(updated);
-    setSelectedPerson(updated);
-    pushToast("Đã tải ảnh đại diện", "success");
-  }
-
-  async function uploadEventPhoto(eventId: string, file: File) {
-    const uploaded = await uploadEventImage(sb, eventId, file);
-    if (!("publicUrl" in uploaded)) {
-      pushToast(uploaded.error ?? "Tải ảnh thất bại", "error");
-      return;
-    }
-
-    await updateEventPhoto(sb, eventId, uploaded.publicUrl);
-    setEvents((prev) => prev.map((x) => (x.id === eventId ? { ...x, photo_url: uploaded.publicUrl } : x)));
-    pushToast("Đã tải ảnh sự kiện", "success");
-  }
-
-  const calendarEvents = useMemo(() => mapEventsToCalendar(events, eventFilterPersonId || null), [events, eventFilterPersonId]);
 
   if (!userId) {
     return <AuthForm loading={isAuthLoading} error={authError} message={authMessage} onLogin={login} onRegister={register} />;
   }
 
-  function getGroupTypeLabel(groupType: RelationshipGroup["group_type"]) {
-    if (groupType === "family") return "Gia đình";
-    if (groupType === "company") return "Công ty";
-    if (groupType === "friends") return "Bạn bè";
-    if (groupType === "clan") return "Dòng họ";
-    return "Nhóm khác";
-  }
-
   return (
-    <main className="min-h-screen text-slate-900">
-      <EventFormDialog
-        open={isEventDialogOpen}
-        people={people}
-        loading={isEventSubmitting}
-        onClose={() => setIsEventDialogOpen(false)}
-        onSubmit={handleCreateEvent}
-      />
-      <RelationshipFormDialog
-        open={isRelationshipDialogOpen}
-        people={people}
-        loading={isRelationshipSubmitting}
-        initialSourceId={pendingRelation?.sourceId ?? null}
-        initialTargetId={pendingRelation?.targetId ?? null}
-        onClose={() => {
-          setIsRelationshipDialogOpen(false);
-          setPendingRelation(null);
-        }}
-        onSubmit={handleCreateRelationship}
-      />
-      {quickAddAnchorId && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md space-y-3 rounded-xl border border-slate-200 bg-white p-4">
-            <h3 className="font-semibold">Thêm người liên quan</h3>
-            <p className="text-sm text-slate-500">
-              Quan hệ với: {people.find((p) => p.id === quickAddAnchorId)?.full_name ?? "Nút neo"}
-            </p>
-            <input
-              className="w-full rounded-lg border p-2 text-sm"
-              placeholder="Họ tên"
-              value={quickAddName}
-              onChange={(e) => setQuickAddName(e.target.value)}
-            />
-            <select
-              className="w-full rounded-lg border p-2 text-sm"
-              value={quickAddRelationType}
-              onChange={(e) => setQuickAddRelationType(e.target.value as RelationType)}
-            >
-              {Object.entries(RELATION_LABELS)
-                .filter(([key]) => key !== "self")
-                .map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-            </select>
-            <div className="flex justify-end gap-2">
-              <button className="rounded-lg border px-3 py-2 text-sm" onClick={() => setQuickAddAnchorId(null)}>
-                Hủy
-              </button>
-              <button
-                disabled={quickAddSubmitting || !quickAddName.trim()}
-                className="rounded-lg bg-cyan-600 px-3 py-2 text-sm text-white disabled:opacity-60"
-                onClick={() => void submitQuickAdd()}
-              >
-                {quickAddSubmitting ? "Đang lưu..." : "Lưu"}
-              </button>
+    <main className="min-h-screen bg-slate-100 text-slate-900">
+      <div className="mx-auto max-w-[1440px] p-4 lg:p-6">
+        <header className="mb-4 rounded-3xl border border-white/60 bg-white/80 p-4 shadow-md backdrop-blur">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 text-xl font-semibold">
+              <Building2 className="text-cyan-600" /> Ký Ức Quan Hệ
             </div>
+            <div className="relative ml-auto min-w-[260px] flex-1 sm:max-w-md">
+              <Search size={14} className="pointer-events-none absolute left-2 top-2.5 text-slate-400" />
+              <input
+                className="w-full rounded-xl border border-slate-200 bg-white px-8 py-2 text-sm"
+                placeholder="Tìm cộng đồng"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+            <button
+              className="inline-flex items-center gap-1 rounded-xl bg-cyan-600 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-500"
+              onClick={() => {
+                const next: Community = {
+                  id: crypto.randomUUID(),
+                  name: `Cộng đồng mới ${communities.length + 1}`,
+                  type: "other",
+                  description: "Mô tả ngắn cho cộng đồng mới.",
+                  members: 0,
+                  events: 0,
+                  updatedAt: "Vừa tạo",
+                  status: "active",
+                  cover: "from-sky-400 via-cyan-400 to-teal-500",
+                };
+                setCommunities((prev) => [next, ...prev]);
+                setActiveCommunityId(next.id);
+                setTab("all");
+              }}
+            >
+              <Plus size={14} /> Cộng đồng mới
+            </button>
+            <button
+              title="Đăng xuất"
+              className="rounded-xl bg-slate-100 p-2.5 text-slate-700 hover:bg-slate-200"
+              onClick={() => void logout()}
+            >
+              <LogOut size={18} />
+            </button>
           </div>
-        </div>
-      )}
 
-      <div className="mx-auto max-w-[1450px] p-4 lg:p-6">
-        <div className="mb-4 rounded-3xl border border-white/50 bg-white/70 p-4 shadow-lg backdrop-blur">
-          <div className="mb-3 flex items-start gap-3 pb-1">
-            {visibleGroups.map((group) => {
-              const isActive = group.id === activeGroupId;
-              return (
-                <div
-                  key={group.id}
-                  className={`min-w-[200px] shrink-0 rounded-2xl border px-4 py-3 text-left transition md:w-[calc((100%-4rem)/5)] ${
-                    isActive
-                      ? "border-cyan-500 bg-cyan-50 shadow-sm"
-                      : "border-slate-200 bg-white hover:border-cyan-300"
-                  }`}
-                >
-                  <div className="mb-1 flex items-start justify-between gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(["all", "family", "company", "friends", "clan", "other", "archived"] as HubTab[]).map((item) => (
+              <button
+                key={item}
+                onClick={() => setTab(item)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  tab === item ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                {tabLabel(item)}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+          <section className="rounded-3xl border border-white/60 bg-white/80 p-4 shadow-md backdrop-blur">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Community Hub</h2>
+              <p className="text-xs text-slate-500">{filteredCommunities.length} cộng đồng</p>
+            </div>
+
+            {filteredCommunities.length === 0 ? (
+              <div className="grid min-h-64 place-items-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 text-center">
+                <div>
+                  <Archive className="mx-auto mb-2 text-slate-400" />
+                  <p className="text-sm font-medium">Không có cộng đồng phù hợp</p>
+                  <p className="text-xs text-slate-500">Thử từ khóa khác hoặc đổi bộ lọc.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {filteredCommunities.map((community) => {
+                  const isActive = community.id === activeCommunityId;
+                  return (
                     <button
-                      onClick={() => setActiveGroupId(group.id)}
-                      className="flex-1 text-left"
+                      key={community.id}
+                      onClick={() => setActiveCommunityId(community.id)}
+                      className={`overflow-hidden rounded-2xl border text-left transition ${
+                        isActive ? "border-cyan-500 ring-2 ring-cyan-100" : "border-slate-200 hover:border-cyan-300"
+                      }`}
                     >
-                      <p className="truncate text-sm font-semibold text-slate-900">{group.name}</p>
-                      <p className="text-xs text-slate-500">{getGroupTypeLabel(group.group_type)}</p>
-                      <p className="text-xs text-slate-400">{groupPersonCount[group.id] ?? 0} thành viên</p>
+                      <div className={`h-20 bg-gradient-to-r ${community.cover}`} />
+                      <div className="space-y-1 bg-white p-3">
+                        <p className="line-clamp-1 text-sm font-semibold">{community.name}</p>
+                        <p className="line-clamp-2 text-xs text-slate-500">{community.description}</p>
+                        <p className="text-xs text-slate-500">
+                          {typeLabel(community.type)} • {community.members} thành viên
+                        </p>
+                        <p className="text-xs text-slate-400">Cập nhật: {community.updatedAt}</p>
+                      </div>
                     </button>
-                    <div className="relative">
-                      <button
-                        aria-label="Tùy chọn nhóm"
-                        className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"
-                        onClick={() => setOpenGroupMenuId((prev) => (prev === group.id ? null : group.id))}
-                      >
-                        <MoreHorizontal size={16} />
-                      </button>
-                      {openGroupMenuId === group.id && (
-                        <div className="absolute right-0 top-8 z-20 w-36 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
-                          <button
-                            className="w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-100"
-                            onClick={() => {
-                              setOpenGroupMenuId(null);
-                              void renameGroupById(group.id);
-                            }}
-                          >
-                            Đổi tên
-                          </button>
-                          <button
-                            className="w-full rounded-lg px-2 py-1.5 text-left text-sm text-rose-600 hover:bg-rose-50 disabled:opacity-60"
-                            disabled={groups.length <= 1}
-                            onClick={() => {
-                              setOpenGroupMenuId(null);
-                              void deleteGroupById(group.id);
-                            }}
-                          >
-                            Xóa nhóm
-                          </button>
-                        </div>
-                      )}
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-3xl border border-white/60 bg-white/80 p-4 shadow-md backdrop-blur">
+            <h2 className="text-lg font-semibold">Community Detail</h2>
+            {!activeCommunity ? (
+              <p className="mt-3 text-sm text-slate-500">Chọn một cộng đồng để xem chi tiết.</p>
+            ) : (
+              <div className="mt-3 space-y-3">
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="mb-2 h-24 rounded-xl bg-gradient-to-r from-cyan-500 via-sky-500 to-blue-500" />
+                  <p className="text-base font-semibold">{activeCommunity.name}</p>
+                  <p className="text-sm text-slate-600">{activeCommunity.description}</p>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                    <span className="rounded-full bg-slate-100 px-2 py-1">{typeLabel(activeCommunity.type)}</span>
+                    <span className="rounded-full bg-slate-100 px-2 py-1">{activeCommunity.members} thành viên</span>
+                    <span className="rounded-full bg-slate-100 px-2 py-1">{activeCommunity.events} sự kiện</span>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-semibold">Nhánh nổi bật</p>
+                    <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                      <li>• Nhánh gia đình chính</li>
+                      <li>• Nhánh ông bà bên nội</li>
+                      <li>• Nhánh anh chị em</li>
+                    </ul>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-semibold">Sự kiện gần nhất</p>
+                    <div className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+                      <CalendarDays size={14} />
+                      <span>Sinh nhật Bố - 15/05/2026</span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 text-xs text-slate-600">
+                      <CalendarDays size={14} />
+                      <span>Họp mặt gia đình - 01/06/2026</span>
                     </div>
                   </div>
                 </div>
-              );
-            })}
-            {hiddenGroups.length > 0 && (
-              <div className="relative min-w-[120px] shrink-0 md:w-[calc((100%-4rem)/5)]">
-                <button
-                  onClick={() => setIsHiddenGroupsOpen((prev) => !prev)}
-                  className="flex h-full w-full items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:border-cyan-400 hover:text-cyan-700"
-                >
-                  +{hiddenGroups.length}
-                </button>
-                {isHiddenGroupsOpen && (
-                  <div className="absolute left-0 top-14 z-30 w-72 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-                    <div className="mb-2 flex items-center justify-between px-2 pt-1">
-                      <p className="text-sm font-semibold text-slate-800">Nhóm khác</p>
-                      <button
-                        className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"
-                        onClick={() => setIsHiddenGroupsOpen(false)}
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                    <div className="space-y-1">
-                      {hiddenGroups.map((group) => (
-                        <button
-                          key={group.id}
-                          className="w-full rounded-xl px-2 py-2 text-left hover:bg-slate-100"
-                          onClick={() => {
-                            setActiveGroupId(group.id);
-                            setIsHiddenGroupsOpen(false);
-                          }}
-                        >
-                          <p className="truncate text-sm font-semibold text-slate-900">{group.name}</p>
-                          <p className="text-xs text-slate-500">
-                            {getGroupTypeLabel(group.group_type)} • {groupPersonCount[group.id] ?? 0} thành viên
-                          </p>
-                        </button>
-                      ))}
+
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    { id: "tree", label: "Cây quan hệ" },
+                    { id: "radial", label: "Vòng tròn" },
+                    { id: "list", label: "Danh sách" },
+                    { id: "timeline", label: "Timeline" },
+                    { id: "cluster", label: "Nhóm cụm" },
+                  ] as Array<{ id: ViewMode; label: string }>).map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => setViewMode(item.id)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                        viewMode === item.id ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                {activeGraph ? (
+                  <>
+                    {viewMode === "tree" && <StoryMapCanvas graph={activeGraph} />}
+                    {viewMode === "radial" && <RadialView graph={activeGraph} />}
+                    {viewMode === "list" && <ListView graph={activeGraph} />}
+                    {viewMode === "timeline" && <TimelineView graph={activeGraph} />}
+                    {viewMode === "cluster" && <ClusterView graph={activeGraph} />}
+                  </>
+                ) : (
+                  <div className="grid min-h-44 place-items-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 text-center">
+                    <div>
+                      <Users className="mx-auto mb-2 text-slate-400" />
+                      <p className="text-sm font-medium">Chưa có dữ liệu sơ đồ</p>
                     </div>
                   </div>
                 )}
               </div>
             )}
-            <button
-              onClick={() => void createNewGroup()}
-              className="flex min-w-[200px] shrink-0 items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:border-cyan-400 hover:text-cyan-700 md:w-[calc((100%-4rem)/5)]"
-            >
-              <Plus size={16} /> + Nhóm
-            </button>
-
-            <div className="ml-auto flex gap-2">
-              {[
-                { id: "graph", icon: GitBranch, title: "Sơ đồ" },
-                { id: "list", icon: List, title: "Danh sách" },
-                { id: "calendar", icon: CalendarDays, title: "Lịch" },
-                { id: "gallery", icon: GalleryHorizontal, title: "Ảnh" },
-              ].map((v) => (
-                <button
-                  key={v.id}
-                  title={v.title}
-                  onClick={() => setViewMode(v.id as ViewMode)}
-                  className={`rounded-xl p-2.5 ${viewMode === v.id ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
-                >
-                  <v.icon size={18} />
-                </button>
-              ))}
-
-              <button
-                title="Đăng xuất"
-                className="rounded-xl bg-slate-100 p-2.5 text-slate-700 hover:bg-slate-200"
-                onClick={() => void logout()}
-              >
-                <LogOut size={18} />
-              </button>
-            </div>
-          </div>
-          <div className="text-sm text-slate-600">Kéo node để dàn bố cục theo ý bạn. Kéo từ chấm phải của node này sang chấm trái node khác để tạo quan hệ nhanh.</div>
-          {viewMode === "graph" && (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-slate-700">Độ sâu hiển thị:</span>
-              <button
-                onClick={() => setGraphMaxDepth(1)}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${graphMaxDepth === 1 ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700"}`}
-              >
-                1 bậc
-              </button>
-              <button
-                onClick={() => setGraphMaxDepth(2)}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${graphMaxDepth === 2 ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700"}`}
-              >
-                2 bậc
-              </button>
-              <button
-                onClick={() => setGraphMaxDepth(3)}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${graphMaxDepth === 3 ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700"}`}
-              >
-                3 bậc
-              </button>
-              <button
-                onClick={() => setGraphMaxDepth(99)}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${graphMaxDepth >= 99 ? "bg-cyan-600 text-white" : "bg-slate-100 text-slate-700"}`}
-              >
-                Mở tất cả
-              </button>
-              <div className="ml-2 flex items-center gap-2">
-                <button
-                  onClick={() => void undoGraphAction()}
-                  disabled={!undoStack.length || isReplayingAction}
-                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50"
-                >
-                  Hoàn tác
-                </button>
-                <button
-                  onClick={() => void redoGraphAction()}
-                  disabled={!redoStack.length || isReplayingAction}
-                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50"
-                >
-                  Làm lại
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-[300px_1fr_340px]">
-          <aside className="space-y-3 rounded-3xl border border-white/50 bg-white/70 p-4 shadow-lg backdrop-blur">
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
-              <Users size={18} /> Thành viên
-            </h2>
-
-            <div className="relative">
-              <Search size={14} className="absolute left-2 top-2.5 text-slate-400" />
-              <input
-                className="w-full rounded-xl border border-slate-200 bg-white px-8 py-2 text-sm"
-                placeholder="Tìm tên hoặc quan hệ"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-
-            <div className="max-h-[70vh] space-y-2 overflow-auto pr-1">
-              {filteredPeople.map((p) => (
-                <button
-                  key={p.id}
-                  className="w-full rounded-xl border border-slate-200 bg-white p-2 text-left transition hover:bg-slate-50"
-                  onClick={() => setSelectedPerson(p)}
-                >
-                  <p className="text-sm font-medium">{p.full_name}</p>
-                  <p className="text-xs text-slate-500">{p.relationship_to_user || "-"}</p>
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                aria-label="Thêm thành viên"
-                onClick={() => openQuickAdd(selectedPerson?.id ?? activeGroup?.root_person_id ?? people[0]?.id ?? null)}
-                className="flex items-center justify-center gap-1 rounded-xl bg-cyan-600 px-2 py-2 text-sm text-white hover:bg-cyan-500"
-              >
-                <Plus size={14} /> Người
-              </button>
-              <button
-                aria-label="Thêm quan hệ"
-                onClick={() => void addRelationship()}
-                className="rounded-xl bg-slate-800 px-2 py-2 text-sm text-white hover:bg-slate-700"
-              >
-                + Quan hệ
-              </button>
-            </div>
-
-            <button
-              aria-label="Thêm sự kiện"
-              onClick={() => void addEvent()}
-              className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm hover:bg-slate-50"
-            >
-              + Sự kiện
-            </button>
-          </aside>
-
-          <section className="min-h-[70vh] rounded-3xl border border-white/50 bg-white/70 p-2 shadow-lg backdrop-blur">
-            {viewMode === "graph" && (
-              <RelationshipGraph
-                nodes={nodes}
-                edges={edges}
-                highlightedEdgeIds={highlightedEdgeIds}
-                compactMode={isMobileGraph}
-                onConnectNodes={handleConnectNodes}
-                onNodePositionChange={handleNodePositionChange}
-              />
-            )}
-
-            {viewMode === "list" && (
-              <div className="space-y-2 p-3">
-                {filteredPeople.map((p) => (
-                  <div key={p.id} className="rounded-xl border border-slate-200 bg-white p-3">
-                    <p className="font-semibold">{p.full_name}</p>
-                    <p className="text-sm text-slate-600">{p.occupation || "Chưa có nghề nghiệp"}</p>
-                    <p className="text-sm">{p.relationship_to_user || "Chưa rõ quan hệ"}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {viewMode === "calendar" && (
-              <div>
-                <div className="p-3">
-                  <select
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    value={eventFilterPersonId}
-                    onChange={(e) => setEventFilterPersonId(e.target.value)}
-                  >
-                    <option value="">Tất cả thành viên</option>
-                    {people.map((person) => (
-                      <option key={person.id} value={person.id}>
-                        {person.full_name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <EventCalendar events={calendarEvents} />
-              </div>
-            )}
-
-            {viewMode === "gallery" && <GalleryView people={people} />}
           </section>
-
-          <aside className="space-y-3 rounded-3xl border border-white/50 bg-white/70 p-4 shadow-lg backdrop-blur">
-            <h3 className="text-lg font-semibold">Chi tiết thành viên</h3>
-
-            <PersonDetailPanel
-              person={selectedPerson}
-              onChange={setSelectedPerson}
-              onSave={async () => {
-                if (selectedPerson) await savePerson(selectedPerson);
-              }}
-              onUploadAvatar={uploadAvatar}
-            />
-
-            <div className="border-t border-slate-200 pt-3">
-              <h4 className="mb-2 text-sm font-semibold">Sự kiện gần đây</h4>
-              <div className="max-h-56 space-y-2 overflow-auto">
-                {events.map((event) => (
-                  <div key={event.id} className="rounded-xl border border-slate-200 bg-white p-2">
-                    <button className="w-full text-left" onClick={() => setSelectedEventId(event.id)}>
-                      <p className="text-sm font-medium">{event.title}</p>
-                      <p className="text-xs text-slate-500">{event.event_date}</p>
-                    </button>
-
-                    {selectedEventId === event.id && (
-                      <div className="mt-2 space-y-2">
-                        {event.photo_url && (
-                          <img src={event.photo_url} alt={event.title} className="h-24 w-full rounded-xl object-cover" />
-                        )}
-                        <ImageUploader label="Ảnh sự kiện" onFileSelected={(file) => uploadEventPhoto(event.id, file)} />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </aside>
         </div>
       </div>
     </main>
