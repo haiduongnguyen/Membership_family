@@ -97,7 +97,7 @@ export default function StoryMapCanvas({ graph }: Props) {
   }, [graph.links]);
 
   return (
-    <div className="h-[540px] rounded-2xl border border-slate-200 bg-white">
+    <div className="h-[440px] rounded-2xl border border-slate-200 bg-white">
       <ReactFlow fitView nodes={nodes} edges={edges}>
         <MiniMap pannable zoomable />
         <Controls />
